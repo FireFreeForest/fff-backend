@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS push_tokens;
+DROP TABLE IF EXISTS outbox;
+DROP TABLE IF EXISTS commands;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS telemetry_fire;
+DROP TABLE IF EXISTS telemetry_environment;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS users;

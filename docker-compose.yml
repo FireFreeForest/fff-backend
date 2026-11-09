@@ -1,0 +1,128 @@
+name: fire-free-forest
+
+x-app-env: &app-env
+  APP_ENV: production
+  HTTP_ADDR: ":8080"
+  LOG_LEVEL: info
+  DB_DSN: "host=postgres user=fff password=${POSTGRES_PASSWORD:-fff} dbname=fff port=5432 sslmode=disable TimeZone=UTC"
+  REDIS_ADDR: "redis:6379"
+  MQTT_BROKER: "tcp://mosquitto:1883"
+  MQTT_USERNAME: backend
+  MQTT_PASSWORD: "${MQTT_BACKEND_PASSWORD:-change-me-backend}"
+  MQTT_QOS: "1"
+  JWT_SECRET: "${JWT_SECRET:-change-me-jwt-secret-please-use-32-chars-min}"
+  SEED_ADMIN_EMAIL: "${SEED_ADMIN_EMAIL:-admin@fff.local}"
+  SEED_ADMIN_PASSWORD: "${SEED_ADMIN_PASSWORD:-admin12345}"
+  SEED_ADMIN_NAME: "${SEED_ADMIN_NAME:-Administrator}"
+  SEED_DEVICE_ID: "${SEED_DEVICE_ID:-DEVICE-123}"
+  CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+  WS_ALLOWED_ORIGIN: "${WS_ALLOWED_ORIGIN:-*}"
+  FCM_CREDENTIALS_FILE: "${FCM_CREDENTIALS_FILE:-}"
+  FCM_PROJECT_ID: "${FCM_PROJECT_ID:-}"
+  FCM_MIN_SEVERITY: "${FCM_MIN_SEVERITY:-critical}"
+  TELEMETRY_RETENTION_DAYS: "${TELEMETRY_RETENTION_DAYS:-90}"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fff
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fff}"
+      POSTGRES_DB: fff
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fff -d fff"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  mosquitto-init:
+    image: eclipse-mosquitto:2
+    user: root
+    restart: "no"
+    environment:
+      MQTT_BACKEND_PASSWORD: "${MQTT_BACKEND_PASSWORD:-change-me-backend}"
+      MQTT_DEVICE_USERNAME: "${MQTT_DEVICE_USERNAME:-DEVICE-123}"
+      MQTT_DEVICE_PASSWORD: "${MQTT_DEVICE_PASSWORD:-device123}"
+    entrypoint: ["/bin/sh", "/mosquitto/init/init.sh"]
+    volumes:
+      - mosquitto-data:/mosquitto/data
+      - ./deploy/mosquitto/init.sh:/mosquitto/init/init.sh:ro
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    depends_on:
+      mosquitto-init:
+        condition: service_completed_successfully
+    ports:
+      - "1883:1883"
+    environment:
+      MQTT_BACKEND_PASSWORD: "${MQTT_BACKEND_PASSWORD:-change-me-backend}"
+    volumes:
+      - mosquitto-data:/mosquitto/data
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -p 1883 -u backend -P \"$${MQTT_BACKEND_PASSWORD}\" -t '$$SYS/broker/uptime' -C 1 -W 3 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    image: fire-free-forest-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    image: fire-free-forest-backend:local
+    restart: unless-stopped
+    command: ["/app/worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      MQTT_CLIENT_ID: fff-worker-1
+    volumes:
+      - ./deploy/fcm:/app/secrets:ro
+
+volumes:
+  pgdata:
+  redisdata:
+  mosquitto-data:

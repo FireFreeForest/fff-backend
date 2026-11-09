@@ -1,0 +1,9 @@
+.git
+.gitignore
+.env
+*.md
+scripts/
+**/*_test.go
+Dockerfile
+docker-compose.yml
+deploy/fcm/*.json

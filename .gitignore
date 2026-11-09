@@ -1,0 +1,6 @@
+.env
+*.exe
+/worker
+/simulator
+deploy/fcm/*.json
+*.log

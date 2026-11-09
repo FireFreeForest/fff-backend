@@ -1,0 +1,200 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	Env      string
+	HTTPAddr string
+	LogLevel string
+
+	DBDSN string
+
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+
+	MQTTBroker   string
+	MQTTClientID string
+	MQTTUsername string
+	MQTTPassword string
+	MQTTQoS      int
+
+	JWTSecret  string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+
+	CORSOrigins []string
+
+	MigrateOnStart      bool
+	AutoRegisterDevices bool
+	SeedAdminEmail      string
+	SeedAdminPassword   string
+	SeedAdminName       string
+	SeedDeviceID        string
+	SeedDeviceName      string
+
+	TemperatureHighC float64
+	SoilDryPct       float64
+	SmokeLevelMax    int
+	EventCooldown    time.Duration
+	FireCooldown     time.Duration
+
+	AutoPumpEnabled  bool
+	AutoPumpDuration time.Duration
+	AutoPumpCooldown time.Duration
+	AutoPumpMax      time.Duration
+
+	OfflineAfter    time.Duration
+	CommandTimeout  time.Duration
+	RetentionDays   int
+	WSAllowedOrigin string
+	LoginRatePerMin int
+
+	FCMCredentialsFile string
+	FCMProjectID       string
+	FCMMinSeverity     string
+}
+
+func Load() (*Config, error) {
+	cfg := &Config{
+		Env:      env("APP_ENV", "development"),
+		HTTPAddr: env("HTTP_ADDR", ":8080"),
+		LogLevel: env("LOG_LEVEL", "info"),
+
+		DBDSN: env("DB_DSN", ""),
+
+		RedisAddr:     env("REDIS_ADDR", "localhost:6379"),
+		RedisPassword: env("REDIS_PASSWORD", ""),
+		RedisDB:       envInt("REDIS_DB", 0),
+
+		MQTTBroker:   env("MQTT_BROKER", "tcp://localhost:1883"),
+		MQTTClientID: env("MQTT_CLIENT_ID", ""),
+		MQTTUsername: env("MQTT_USERNAME", "backend"),
+		MQTTPassword: env("MQTT_PASSWORD", "change-me-backend"),
+		MQTTQoS:      envInt("MQTT_QOS", 1),
+
+		JWTSecret:  env("JWT_SECRET", ""),
+		AccessTTL:  envDuration("JWT_ACCESS_TTL", 15*time.Minute),
+		RefreshTTL: envDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
+
+		CORSOrigins: envCSV("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173"),
+
+		MigrateOnStart:      envBool("MIGRATE_ON_START", true),
+		AutoRegisterDevices: envBool("AUTO_REGISTER_DEVICES", true),
+		SeedAdminEmail:      env("SEED_ADMIN_EMAIL", "admin@fff.local"),
+		SeedAdminPassword:   env("SEED_ADMIN_PASSWORD", "admin12345"),
+		SeedAdminName:       env("SEED_ADMIN_NAME", "Administrator"),
+		SeedDeviceID:        env("SEED_DEVICE_ID", "DEVICE-123"),
+		SeedDeviceName:      env("SEED_DEVICE_NAME", "Simulator Device"),
+
+		TemperatureHighC: envFloat("THRESHOLD_TEMPERATURE_HIGH_C", 40),
+		SoilDryPct:       envFloat("THRESHOLD_SOIL_DRY_PCT", 30),
+		SmokeLevelMax:    envInt("THRESHOLD_SMOKE_LEVEL", 300),
+		EventCooldown:    envDuration("EVENT_COOLDOWN", 5*time.Minute),
+		FireCooldown:     envDuration("FIRE_EVENT_COOLDOWN", time.Minute),
+
+		AutoPumpEnabled:  envBool("AUTO_PUMP_ENABLED", true),
+		AutoPumpDuration: envDuration("AUTO_PUMP_DURATION", 30*time.Second),
+		AutoPumpCooldown: envDuration("AUTO_PUMP_COOLDOWN", 5*time.Minute),
+		AutoPumpMax:      envDuration("AUTO_PUMP_MAX_DURATION", 300*time.Second),
+
+		OfflineAfter:    envDuration("DEVICE_OFFLINE_AFTER", 30*time.Second),
+		CommandTimeout:  envDuration("COMMAND_TIMEOUT", 60*time.Second),
+		RetentionDays:   envInt("TELEMETRY_RETENTION_DAYS", 90),
+		WSAllowedOrigin: env("WS_ALLOWED_ORIGIN", "*"),
+		LoginRatePerMin: envInt("LOGIN_RATE_LIMIT_PER_MIN", 10),
+
+		FCMCredentialsFile: env("FCM_CREDENTIALS_FILE", ""),
+		FCMProjectID:       env("FCM_PROJECT_ID", ""),
+		FCMMinSeverity:     env("FCM_MIN_SEVERITY", "critical"),
+	}
+
+	if cfg.DBDSN == "" {
+		return nil, fmt.Errorf("DB_DSN is required")
+	}
+	if cfg.JWTSecret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is required")
+	}
+	if len(cfg.JWTSecret) < 24 {
+		return nil, fmt.Errorf("JWT_SECRET must be at least 24 characters")
+	}
+	if cfg.MQTTQoS < 0 || cfg.MQTTQoS > 2 {
+		return nil, fmt.Errorf("MQTT_QOS must be 0, 1, or 2")
+	}
+	if cfg.AutoPumpDuration <= 0 || cfg.AutoPumpDuration > cfg.AutoPumpMax {
+		return nil, fmt.Errorf("AUTO_PUMP_DURATION must be between 1s and AUTO_PUMP_MAX_DURATION")
+	}
+	if cfg.OfflineAfter < 5*time.Second {
+		return nil, fmt.Errorf("DEVICE_OFFLINE_AFTER must be at least 5s")
+	}
+	switch strings.ToLower(cfg.FCMMinSeverity) {
+	case "error", "warning", "critical":
+	default:
+		return nil, fmt.Errorf("FCM_MIN_SEVERITY must be error, warning, or critical")
+	}
+	cfg.FCMMinSeverity = strings.ToLower(cfg.FCMMinSeverity)
+	return cfg, nil
+}
+
+func (c *Config) IsProduction() bool { return c.Env == "production" }
+
+func env(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func envBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+			return d
+		}
+	}
+	return def
+}
+
+func envCSV(key, def string) []string {
+	raw := env(key, def)
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
