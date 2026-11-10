@@ -15,6 +15,7 @@ func (w *Worker) runSweeper(ctx context.Context) {
 
 	w.sweepCommands(ctx)
 	w.sweepOfflineDevices(ctx)
+	w.sweepFireEventNotifications(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -22,6 +23,7 @@ func (w *Worker) runSweeper(ctx context.Context) {
 		case <-ticker.C:
 			w.sweepCommands(ctx)
 			w.sweepOfflineDevices(ctx)
+			w.sweepFireEventNotifications(ctx)
 		}
 	}
 }
@@ -72,6 +74,50 @@ func (w *Worker) sweepOfflineDevices(ctx context.Context) {
 		}
 		if ev != nil {
 			w.notifier.NotifyEvent(ctx, device, ev)
+		}
+	}
+}
+
+func (w *Worker) sweepFireEventNotifications(ctx context.Context) {
+	if w.notifier == nil {
+		return
+	}
+
+	now := time.Now()
+	events, err := w.repo.ListDueFireEventNotifications(ctx, now)
+	if err != nil {
+		w.log.Error("failed to list due fire notifications", "error", err)
+		return
+	}
+
+	for i := range events {
+		ev := &events[i]
+		device, err := w.repo.GetDeviceByID(ctx, ev.DeviceID)
+		if err != nil {
+			w.log.Warn("failed to load device for fire follow-up", "event_id", ev.ID, "error", err)
+			continue
+		}
+
+		if ev.ReminderSentAt == nil && !ev.TriggeredAt.After(now.Add(-2*time.Minute)) {
+			if w.notifier.NotifyFireFollowUp(ctx, device, ev, false) {
+				marked, err := w.repo.MarkFireEventReminderSent(ctx, ev.ID)
+				if err != nil {
+					w.log.Error("failed to mark fire reminder sent", "event_id", ev.ID, "error", err)
+				} else if marked {
+					w.log.Info("fire reminder marked sent", "event_id", ev.ID)
+				}
+			}
+		}
+
+		if ev.EscalationSentAt == nil && !ev.TriggeredAt.After(now.Add(-5*time.Minute)) {
+			if w.notifier.NotifyFireFollowUp(ctx, device, ev, true) {
+				marked, err := w.repo.MarkFireEventEscalationSent(ctx, ev.ID)
+				if err != nil {
+					w.log.Error("failed to mark fire escalation sent", "event_id", ev.ID, "error", err)
+				} else if marked {
+					w.log.Info("fire escalation marked sent", "event_id", ev.ID)
+				}
+			}
 		}
 	}
 }

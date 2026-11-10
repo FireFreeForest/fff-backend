@@ -63,15 +63,22 @@ type sendResponse struct {
 	} `json:"error"`
 }
 
-func (c *Client) Send(ctx context.Context, tokens []string, title, body string, data map[string]string) ([]string, error) {
+func (c *Client) Send(ctx context.Context, tokens []string, title, body string, data map[string]string) ([]string, int, error) {
 	if !c.Enabled() || len(tokens) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	var invalid []string
+	var sent int
 	var firstErr error
+
 	for _, token := range tokens {
 		ok, invalidToken, err := c.sendOne(ctx, token, title, body, data)
+
+		if invalidToken {
+			invalid = append(invalid, token)
+		}
+
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -79,11 +86,14 @@ func (c *Client) Send(ctx context.Context, tokens []string, title, body string, 
 			c.log.Warn("fcm send failed", "error", err)
 			continue
 		}
-		if !ok && invalidToken {
-			invalid = append(invalid, token)
+
+		if !ok {
+			continue
 		}
+		sent++
 	}
-	return invalid, firstErr
+
+	return invalid, sent, firstErr
 }
 
 func (c *Client) sendOne(ctx context.Context, token, title, body string, data map[string]string) (bool, bool, error) {

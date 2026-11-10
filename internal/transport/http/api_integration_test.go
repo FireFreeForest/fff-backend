@@ -103,6 +103,29 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}
 	token := login.Data.Tokens.AccessToken
 
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/users", token, map[string]any{
+		"email": "petugas@fff.local", "password": "petugas12345",
+		"name": "Petugas Integration", "role": "petugas",
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("create petugas status=%d", status)
+	}
+
+	var petugasLogin struct {
+		Data struct {
+			Tokens struct {
+				AccessToken string `json:"access_token"`
+			} `json:"tokens"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/auth/login", "", map[string]any{
+		"email": "petugas@fff.local", "password": "petugas12345",
+	}, &petugasLogin)
+	if status != http.StatusOK || petugasLogin.Data.Tokens.AccessToken == "" {
+		t.Fatalf("petugas login status=%d token empty=%v", status, petugasLogin.Data.Tokens.AccessToken == "")
+	}
+	petugasToken := petugasLogin.Data.Tokens.AccessToken
+
 	var created struct {
 		Data struct {
 			DeviceID string `json:"device_id"`
@@ -219,9 +242,14 @@ func TestAPIFlowIntegration(t *testing.T) {
 			Status string `json:"status"`
 		} `json:"data"`
 	}
-	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/events/"+eventID+"/resolve", token, nil, &resolved)
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/events/"+eventID+"/resolve", token, nil, nil)
+	if status != http.StatusForbidden {
+		t.Fatalf("admin resolve status=%d, want %d Forbidden", status, http.StatusForbidden)
+	}
+
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/events/"+eventID+"/resolve", petugasToken, nil, &resolved)
 	if status != http.StatusOK || resolved.Data.Status != string(domain.EventResolved) {
-		t.Fatalf("resolve status=%d event_status=%q", status, resolved.Data.Status)
+		t.Fatalf("petugas resolve status=%d event_status=%q", status, resolved.Data.Status)
 	}
 
 	var dashboard struct {

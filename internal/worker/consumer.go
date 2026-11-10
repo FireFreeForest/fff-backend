@@ -249,7 +249,19 @@ func (w *Worker) processFire(ctx context.Context, topicDeviceID string, payload 
 		w.log.Error("risk evaluation failed", "device_id", device.DeviceID, "error", err)
 		return nil
 	}
+
+	w.log.Info("fire risk evaluation completed",
+		"device_id", device.DeviceID,
+		"flame_detected", tel.FlameDetected,
+		"event_count", len(res.Events),
+	)
+
 	for _, ev := range res.Events {
+		w.log.Info("dispatching event to notifier",
+			"device_id", device.DeviceID,
+			"event_type", ev.EventType,
+			"severity", ev.Severity,
+		)
 		w.notifier.NotifyEvent(ctx, device, ev)
 	}
 	return nil

@@ -173,19 +173,21 @@ type TelemetryFire struct {
 func (TelemetryFire) TableName() string { return "telemetry_fire" }
 
 type Event struct {
-	ID             uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
-	DeviceID       uuid.UUID       `gorm:"type:uuid;not null" json:"device_id"`
-	EventType      EventType       `gorm:"type:text;not null" json:"event_type"`
-	Severity       Severity        `gorm:"type:text;not null" json:"severity"`
-	Source         string          `json:"source"`
-	Message        string          `json:"message"`
-	Status         EventStatus     `gorm:"type:text;not null" json:"status"`
-	Metadata       json.RawMessage `gorm:"type:jsonb" json:"metadata,omitempty"`
-	TriggeredAt    time.Time       `json:"triggered_at"`
-	AcknowledgedBy *uuid.UUID      `gorm:"type:uuid" json:"acknowledged_by,omitempty"`
-	AcknowledgedAt *time.Time      `json:"acknowledged_at,omitempty"`
-	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
+	ID               uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
+	DeviceID         uuid.UUID       `gorm:"type:uuid;not null" json:"device_id"`
+	EventType        EventType       `gorm:"type:text;not null" json:"event_type"`
+	Severity         Severity        `gorm:"type:text;not null" json:"severity"`
+	Source           string          `json:"source"`
+	Message          string          `json:"message"`
+	Status           EventStatus     `gorm:"type:text;not null" json:"status"`
+	Metadata         json.RawMessage `gorm:"type:jsonb" json:"metadata,omitempty"`
+	TriggeredAt      time.Time       `json:"triggered_at"`
+	AcknowledgedBy   *uuid.UUID      `gorm:"type:uuid" json:"acknowledged_by,omitempty"`
+	AcknowledgedAt   *time.Time      `json:"acknowledged_at,omitempty"`
+	ResolvedAt       *time.Time      `json:"resolved_at,omitempty"`
+	ReminderSentAt   *time.Time      `gorm:"column:reminder_sent_at" json:"-"`
+	EscalationSentAt *time.Time      `gorm:"column:escalation_sent_at" json:"-"`
+	CreatedAt        time.Time       `json:"created_at"`
 }
 
 type Command struct {

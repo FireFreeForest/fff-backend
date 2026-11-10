@@ -88,7 +88,10 @@ func NewRouter(d Deps) *gin.Engine {
 	operator.Use(requireRoles(domain.RoleAdmin, domain.RolePetugas))
 	operator.POST("/devices/:deviceID/commands", h.issueCommand)
 	operator.POST("/events/:eventID/acknowledge", h.acknowledgeEvent)
-	operator.POST("/events/:eventID/resolve", h.resolveEvent)
+
+	petugas := secured.Group("")
+	petugas.Use(requireRoles(domain.RolePetugas))
+	petugas.POST("/events/:eventID/resolve", h.resolveEvent)
 
 	admin := secured.Group("")
 	admin.Use(requireRoles(domain.RoleAdmin))

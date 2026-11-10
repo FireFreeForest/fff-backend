@@ -393,6 +393,32 @@ func (r *Repository) ListActiveEventsForDevice(ctx context.Context, deviceID uui
 	return rows, err
 }
 
+func (r *Repository) ListDueFireEventNotifications(ctx context.Context, now time.Time) ([]domain.Event, error) {
+	var rows []domain.Event
+	err := r.db.WithContext(ctx).
+		Where("event_type = ? AND status = ? AND ((reminder_sent_at IS NULL AND triggered_at <= ?) OR (escalation_sent_at IS NULL AND triggered_at <= ?))",
+			domain.EventFireDetected, domain.EventActive, now.Add(-2*time.Minute), now.Add(-5*time.Minute)).
+		Order("triggered_at ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+func (r *Repository) MarkFireEventReminderSent(ctx context.Context, id uuid.UUID) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&domain.Event{}).
+		Where("id = ? AND event_type = ? AND status = ? AND reminder_sent_at IS NULL",
+			id, domain.EventFireDetected, domain.EventActive).
+		Update("reminder_sent_at", time.Now())
+	return res.RowsAffected > 0, res.Error
+}
+
+func (r *Repository) MarkFireEventEscalationSent(ctx context.Context, id uuid.UUID) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&domain.Event{}).
+		Where("id = ? AND event_type = ? AND status = ? AND escalation_sent_at IS NULL",
+			id, domain.EventFireDetected, domain.EventActive).
+		Update("escalation_sent_at", time.Now())
+	return res.RowsAffected > 0, res.Error
+}
+
 func (r *Repository) AcknowledgeEvent(ctx context.Context, id, userID uuid.UUID) (bool, error) {
 	now := time.Now()
 	res := r.db.WithContext(ctx).Model(&domain.Event{}).
