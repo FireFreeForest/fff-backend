@@ -73,6 +73,7 @@ func run() error {
 		return err
 	}
 	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax, cfg.MQTTTopicPrefix)
+	geocoder := service.NewGeocoder(rdb, cfg.GeocodeBaseURL, cfg.GeocodeUserAgent, cfg.GeocodeCacheTTL, log)
 
 	hub := ws.NewHub(log)
 	go hub.Run(ctx)
@@ -83,6 +84,7 @@ func run() error {
 		Repo:     repo,
 		Auth:     auth,
 		Commands: commands,
+		Geocoder: geocoder,
 		Hub:      hub,
 		Redis:    rdb,
 		Logger:   log,

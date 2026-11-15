@@ -54,7 +54,7 @@ func (h *Handler) getDevice(c *gin.Context) {
 func (h *Handler) createDevice(c *gin.Context) {
 	actor, _, _ := currentUser(c)
 	var req struct {
-		DeviceID        string   `json:"device_id" binding:"required"`
+		DeviceID        string   `json:"device_id"`
 		Name            string   `json:"name"`
 		LocationName    string   `json:"location_name"`
 		Latitude        *float64 `json:"latitude"`
@@ -65,8 +65,8 @@ func (h *Handler) createDevice(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid_request", "Payload device tidak valid")
 		return
 	}
-	deviceID := strings.TrimSpace(req.DeviceID)
-	if !deviceIDPattern.MatchString(deviceID) {
+	requestedDeviceID := strings.TrimSpace(req.DeviceID)
+	if requestedDeviceID != "" && !deviceIDPattern.MatchString(requestedDeviceID) {
 		respondError(c, http.StatusUnprocessableEntity, "validation_error", "device_id harus 3-64 karakter (huruf, angka, titik, garis bawah, atau strip)")
 		return
 	}
@@ -78,32 +78,53 @@ func (h *Handler) createDevice(c *gin.Context) {
 		respondError(c, http.StatusUnprocessableEntity, "validation_error", "longitude harus antara -180 dan 180")
 		return
 	}
-	device := &domain.Device{
-		ID:              uuid.New(),
-		DeviceID:        deviceID,
-		Name:            strings.TrimSpace(req.Name),
-		LocationName:    strings.TrimSpace(req.LocationName),
-		Latitude:        req.Latitude,
-		Longitude:       req.Longitude,
-		Status:          domain.DeviceOffline,
-		FirmwareVersion: req.FirmwareVersion,
-		CreatedAt:       time.Now().UTC(),
-		UpdatedAt:       time.Now().UTC(),
-	}
-	if device.Name == "" {
-		device.Name = device.DeviceID
-	}
-	if err := h.repo.CreateDevice(c.Request.Context(), device); err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			respondError(c, http.StatusConflict, "duplicate_device", "device_id sudah terdaftar")
+
+	for attempt := 0; attempt < 5; attempt++ {
+		deviceID := requestedDeviceID
+		if deviceID == "" {
+			generated, err := generateDeviceID()
+			if err != nil {
+				h.log.Error("generate device id failed", "error", err)
+				respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")
+				return
+			}
+			deviceID = generated
+		}
+
+		now := time.Now().UTC()
+		device := &domain.Device{
+			ID:              uuid.New(),
+			DeviceID:        deviceID,
+			Name:            strings.TrimSpace(req.Name),
+			LocationName:    strings.TrimSpace(req.LocationName),
+			Latitude:        req.Latitude,
+			Longitude:       req.Longitude,
+			Status:          domain.DeviceOffline,
+			FirmwareVersion: req.FirmwareVersion,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		if device.Name == "" {
+			device.Name = device.DeviceID
+		}
+		if err := h.repo.CreateDevice(c.Request.Context(), device); err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				if requestedDeviceID == "" {
+					continue
+				}
+				respondError(c, http.StatusConflict, "duplicate_device", "device_id sudah terdaftar")
+				return
+			}
+			h.log.Error("create device failed", "error", err)
+			respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")
 			return
 		}
-		h.log.Error("create device failed", "error", err)
-		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")
+		h.audit(c, &actor, "device.create", "device", device.DeviceID, map[string]any{"name": device.Name})
+		respondData(c, http.StatusCreated, device)
 		return
 	}
-	h.audit(c, &actor, "device.create", "device", device.DeviceID, map[string]any{"name": device.Name})
-	respondData(c, http.StatusCreated, device)
+
+	respondError(c, http.StatusInternalServerError, "internal_error", "Gagal membuat device_id unik")
 }
 
 func (h *Handler) updateDevice(c *gin.Context) {

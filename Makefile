@@ -1,7 +1,7 @@
 GO ?= go
 COMPOSE ?= podman-compose
 
-.PHONY: build test vet tidy run-api run-worker run-sim up down logs ps provision
+.PHONY: build test vet tidy run-api run-worker run-sim up down logs ps provision mqtt-sync
 
 build:
 	$(GO) build ./...
@@ -28,8 +28,8 @@ run-sim:
 	$(GO) run ./cmd/simulator \
 		-device "$${SEED_DEVICE_ID:-FFF-VIRTUAL-DEVICE}" \
 		-broker "$${MQTT_BROKER:-tcp://localhost:1883}" \
-		-username "$${MQTT_DEVICE_USERNAME:-FFF-VIRTUAL-DEVICE}" \
-		-password "$${MQTT_DEVICE_PASSWORD:-device123}" \
+		-username "$${MQTT_DEVICE_USERNAME:?set MQTT_DEVICE_USERNAME}" \
+		-password "$${MQTT_DEVICE_PASSWORD:?set MQTT_DEVICE_PASSWORD}" \
 		-prefix "$${MQTT_TOPIC_PREFIX:-fire-free-forest}" \
 		$(SIM_ARGS)
 
@@ -45,5 +45,8 @@ logs:
 ps:
 	$(COMPOSE) ps
 
-provision:
-	./scripts/provision_device.sh "$(DEVICE)" "$(PASSWORD)"
+provision: mqtt-sync
+
+mqtt-sync:
+	$(COMPOSE) up --force-recreate mosquitto-init
+	$(COMPOSE) kill -s HUP mosquitto

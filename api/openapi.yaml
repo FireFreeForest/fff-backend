@@ -27,6 +27,8 @@ tags:
     description: Daftar, detail, acknowledge, dan resolve event risiko.
   - name: Dashboard
     description: Ringkasan agregat untuk dashboard.
+  - name: Geocoding
+    description: Reverse geocoding koordinat menjadi label lokasi.
   - name: Push
     description: Registrasi token Firebase Cloud Messaging.
   - name: Realtime
@@ -275,9 +277,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [device_id]
               properties:
-                device_id: { type: string, pattern: "^[A-Za-z0-9._-]{3,64}$" }
+                device_id:
+                  type: string
+                  pattern: "^[A-Za-z0-9._-]{3,64}$"
+                  description: Opsional. Jika kosong, backend membuat ID unik berformat FFF-XXXXXXXX.
                 name: { type: string }
                 location_name: { type: string }
                 latitude: { type: number, minimum: -90, maximum: 90 }
@@ -708,6 +712,44 @@ paths:
                       data: { $ref: "#/components/schemas/DashboardSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /geocode/reverse:
+    get:
+      tags: [Geocoding]
+      summary: Ubah koordinat menjadi nama lokasi
+      description: Dipakai mobile dan web dashboard; hasil di-cache oleh backend.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema: { type: number, minimum: -90, maximum: 90 }
+        - name: lon
+          in: query
+          required: true
+          schema: { type: number, minimum: -180, maximum: 180 }
+      responses:
+        "200":
+          description: Nama lokasi; label boleh kosong bila tidak ditemukan
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/GeocodeResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422":
+          description: Koordinat tidak valid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Penyedia geocoding tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /push/tokens:
     post:
       tags: [Push]
@@ -880,6 +922,14 @@ components:
         is_active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    GeocodeResult:
+      type: object
+      properties:
+        label: { type: string, example: "Jalan Merdeka, Palangka, Palangka Raya" }
+        latitude: { type: number, example: -2.2 }
+        longitude: { type: number, example: 113.9 }
+        provider: { type: string, example: openstreetmap }
 
     Device:
       type: object

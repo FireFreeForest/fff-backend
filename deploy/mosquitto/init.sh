@@ -14,20 +14,25 @@ run_passwd() {
     fi
 }
 
+DEVICE_USERNAME="${MQTT_DEVICE_USERNAME:-}"
+DEVICE_PASSWORD="${MQTT_DEVICE_PASSWORD:-}"
+if [ -z "$DEVICE_USERNAME" ] || [ -z "$DEVICE_PASSWORD" ]; then
+    echo "MQTT_DEVICE_USERNAME and MQTT_DEVICE_PASSWORD must be set" >&2
+    exit 1
+fi
+
 if [ ! -f "$DATA/passwd" ]; then
     touch "$DATA/passwd"
     chown 1883:1883 "$DATA/passwd"
     chmod 600 "$DATA/passwd"
     run_passwd backend "${MQTT_BACKEND_PASSWORD:-change-me-backend}"
-    run_passwd "${MQTT_DEVICE_USERNAME:-FFF-VIRTUAL-DEVICE}" "${MQTT_DEVICE_PASSWORD:-device123}"
+    run_passwd "$DEVICE_USERNAME" "$DEVICE_PASSWORD"
     echo "created MQTT password file"
 else
-    # keep provisioned device users, but keep the configured service and demo users in sync
+    # keep the service and shared device accounts in sync; existing per-device users are left untouched
     run_passwd backend "${MQTT_BACKEND_PASSWORD:-change-me-backend}"
-    if [ -n "${MQTT_DEVICE_USERNAME:-}" ]; then
-        run_passwd "$MQTT_DEVICE_USERNAME" "${MQTT_DEVICE_PASSWORD:-device123}"
-    fi
-    echo "updated backend and configured device MQTT users; other device users kept"
+    run_passwd "$DEVICE_USERNAME" "$DEVICE_PASSWORD"
+    echo "updated backend and shared device MQTT users"
 fi
 
 PREFIX="${MQTT_TOPIC_PREFIX:-fire-free-forest}"
@@ -37,10 +42,10 @@ user backend
 topic readwrite $PREFIX/#
 topic read \$SYS/#
 
-pattern write $PREFIX/%u/telemetry/#
-pattern write $PREFIX/%u/event
-pattern write $PREFIX/%u/command/ack
-pattern read $PREFIX/%u/command
+pattern write $PREFIX/%c/telemetry/#
+pattern write $PREFIX/%c/event
+pattern write $PREFIX/%c/command/ack
+pattern read $PREFIX/%c/command
 EOF
 
 chown 1883:1883 "$DATA" "$DATA/passwd" "$DATA/acl"

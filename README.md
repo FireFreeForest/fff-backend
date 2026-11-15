@@ -88,12 +88,21 @@ make build
 
 ## Simulator Perangkat
 
+Cara termudah, kredensial dibaca dari `.env`:
+
 ```bash
+make run-sim
+```
+
+Atau secara manual:
+
+```bash
+set -a; . ./.env; set +a
 go run ./cmd/simulator \
   -device FFF-VIRTUAL-DEVICE \
   -broker tcp://localhost:1883 \
-  -username FFF-VIRTUAL-DEVICE \
-  -password device123 \
+  -username "$MQTT_DEVICE_USERNAME" \
+  -password "$MQTT_DEVICE_PASSWORD" \
   -prefix fire-free-forest \
   -env-interval 30s \
   -fire-interval 5s \
@@ -147,7 +156,7 @@ Semua endpoint di bawah prefix `/api/v1`.
 | POST | `/users` | admin | Tambah user |
 | PATCH | `/users/:userID` | admin | Ubah user |
 | GET | `/devices` | semua | Daftar device |
-| POST | `/devices` | admin | Tambah device |
+| POST | `/devices` | admin | Tambah device; `device_id` opsional dan dibuat otomatis bila kosong |
 | GET | `/devices/:deviceID` | semua | Detail device |
 | PATCH | `/devices/:deviceID` | admin | Ubah device |
 | DELETE | `/devices/:deviceID` | admin | Hapus device |
@@ -163,12 +172,17 @@ Semua endpoint di bawah prefix `/api/v1`.
 | POST | `/events/:eventID/acknowledge` | admin, petugas | Tandai event ditangani |
 | POST | `/events/:eventID/resolve` | admin, petugas | Tutup event |
 | GET | `/dashboard/summary` | semua | Ringkasan dashboard |
+| GET | `/geocode/reverse?lat=&lon=` | semua | Label lokasi dari koordinat (proxy Nominatim + cache Redis) |
 | POST | `/push/tokens` | semua | Daftarkan token FCM |
 | DELETE | `/push/tokens/:token` | semua | Hapus token FCM |
 | POST | `/realtime/ticket` | semua | Tiket WebSocket (60 detik) |
 | GET | `/ws?ticket=...` | tiket | Koneksi WebSocket |
 
 Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `to` (RFC3339), `page`, `per_page`.
+
+Saat `device_id` tidak dikirim pada `POST /devices`, backend membuat ID `FFF-XXXXXXXX` (8 karakter acak) dan mengembalikannya di field `device_id`. Mobile memakai ID dari respons tersebut untuk provisioning SoftAP. ID manual tetap diterima selama cocok dengan pola `A-Za-z0-9._-` sepanjang 3–64 karakter.
+
+`GET /geocode/reverse` memakai Nominatim/OpenStreetMap, menyimpan hasil di Redis (`GEOCODE_CACHE_TTL`, default `720h`), dan membatasi request ke Nominatim maksimal 1 request/detik. Set `GEOCODE_USER_AGENT` ke identitas aplikasi yang valid untuk penggunaan produksi.
 
 Command pompa:
 
@@ -297,24 +311,31 @@ Auto pump backend **nonaktif secara default** karena website/perangkat sudah mem
 
 ## Provisioning Device MQTT
 
-Device default `FFF-VIRTUAL-DEVICE` dibuat otomatis saat pertama kali inisialisasi volume Mosquitto. Untuk device baru:
+Semua device memakai **satu akun MQTT bersama**. Identitas device diambil dari MQTT client ID, dan client ID **wajib sama dengan `device_id`**. ACL memakai pola `%c` sehingga setiap device hanya bisa menulis ke topik miliknya sendiri.
 
-```bash
-make provision DEVICE=DEVICE-456 PASSWORD=device456
-```
+1. Isi `.env` dengan kredensial acak:
+   ```bash
+   MQTT_DEVICE_USERNAME=fff-<random>
+   MQTT_DEVICE_PASSWORD=<random-panjang>
+   ```
+2. Sinkronkan akun ke Mosquitto:
+   ```bash
+   make mqtt-sync
+   # alias lama: make provision
+   ```
+3. Di firmware/website, set username dan password yang sama, lalu set client ID = `device_id`.
 
-Script menambahkan user MQTT dan mengirim SIGHUP ke broker. ACL memakai pola username sehingga device hanya dapat menulis ke topik miliknya sendiri, dan username MQTT harus sama dengan `device_id`. Device juga otomatis terdaftar di database saat pesan pertama diterima (`AUTO_REGISTER_DEVICES=true`).
+Tidak ada lagi pembuatan user per device. Script `scripts/provision_device.sh` sekarang hanya menyinkronkan akun bersama dan mengirim SIGHUP ke broker. Device otomatis terdaftar di database saat pesan pertama diterima (`AUTO_REGISTER_DEVICES=true`).
+
+Catatan migrasi: user per-device lama pada volume Mosquitto yang sudah ada tidak dihapus otomatis. Untuk produksi, gunakan volume baru atau hapus user lama setelah semua device pindah ke akun bersama.
 
 ### Integrasi Website Virtual Device
 
 Website acuan: `https://virtual-device-six.vercel.app/`.
 
-1. Provision user yang sama dengan device ID website:
-   ```bash
-   ./scripts/provision_device.sh FFF-VIRTUAL-DEVICE device123
-   ```
+1. Pastikan akun bersama sudah disinkronkan dengan `make mqtt-sync`.
 2. Di pengaturan website, isi broker `ws://localhost:9001/mqtt` untuk backend lokal (atau `ws://<host>:9001/mqtt`).
-3. Isi prefix `fire-free-forest`, device ID `FFF-VIRTUAL-DEVICE`, username `FFF-VIRTUAL-DEVICE`, dan password device.
+3. Isi prefix `fire-free-forest`, device ID `FFF-VIRTUAL-DEVICE`, username dan password dari `.env`, serta **client ID = `FFF-VIRTUAL-DEVICE`**.
 4. Untuk deployment publik, terminasi TLS di reverse proxy dan gunakan `wss://`.
 5. Website tetap menjadi simulator acuan; backend tidak menggantikan simulator perangkat.
 
@@ -327,7 +348,9 @@ Lihat `.env.example`. Variabel wajib:
 - `DB_DSN`
 - `JWT_SECRET` minimal 24 karakter
 
-Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `AUTO_PUMP_ENABLED`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`.
+Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`.
+
+`MQTT_DEVICE_USERNAME` dan `MQTT_DEVICE_PASSWORD` wajib diisi saat memakai Docker Compose; nilainya dipakai semua device dan website virtual device. Gunakan username acak serta password panjang, bukan default contoh.
 
 Untuk mengaktifkan FCM:
 
@@ -435,7 +458,7 @@ backend/
   internal/transport/ HTTP handler + WebSocket hub
   migrations/         migrasi SQL
   deploy/mosquitto/   konfigurasi broker dan provisioning
-  scripts/            provisioning device
+  scripts/            sinkronisasi akun MQTT bersama
 ```
 
 ## Deployment VPS dengan Docker Compose dan Caddy
@@ -461,7 +484,7 @@ Konfigurasi produksi memakai profil Compose `prod`; Caddy hanya berjalan saat pr
 6. Caddy akan menerbitkan sertifikat otomatis untuk:
    - `https://api.domain.com` → API dan WebSocket `/api/v1/ws`
    - `wss://mqtt.domain.com/mqtt` → Mosquitto WebSocket untuk website virtual device
-7. Di website virtual device, isi broker `wss://mqtt.domain.com/mqtt`, prefix `fire-free-forest`, device ID dan username `FFF-VIRTUAL-DEVICE`, serta password device dari `.env`.
+7. Di website virtual device, isi broker `wss://mqtt.domain.com/mqtt`, prefix `fire-free-forest`, device ID `FFF-VIRTUAL-DEVICE`, client ID `FFF-VIRTUAL-DEVICE`, serta username/password bersama dari `.env`.
 8. Verifikasi:
    ```bash
    curl https://api.domain.com/healthz

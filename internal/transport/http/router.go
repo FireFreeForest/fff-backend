@@ -22,6 +22,7 @@ type Deps struct {
 	Repo     *repository.Repository
 	Auth     *service.AuthService
 	Commands *service.CommandService
+	Geocoder *service.Geocoder
 	Hub      *ws.Hub
 	Redis    *goredis.Client
 	Logger   *slog.Logger
@@ -32,6 +33,7 @@ type Handler struct {
 	repo     *repository.Repository
 	auth     *service.AuthService
 	commands *service.CommandService
+	geocoder *service.Geocoder
 	hub      *ws.Hub
 	rdb      *goredis.Client
 	log      *slog.Logger
@@ -46,6 +48,7 @@ func NewRouter(d Deps) *gin.Engine {
 		repo:     d.Repo,
 		auth:     d.Auth,
 		commands: d.Commands,
+		geocoder: d.Geocoder,
 		hub:      d.Hub,
 		rdb:      d.Redis,
 		log:      d.Logger,
@@ -81,6 +84,7 @@ func NewRouter(d Deps) *gin.Engine {
 	secured.GET("/events", h.listEvents)
 	secured.GET("/events/:eventID", h.getEvent)
 	secured.GET("/dashboard/summary", h.dashboardSummary)
+	secured.GET("/geocode/reverse", h.reverseGeocode)
 	secured.POST("/push/tokens", h.registerPushToken)
 	secured.DELETE("/push/tokens/:token", h.deletePushToken)
 

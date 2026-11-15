@@ -138,6 +138,18 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("create device status=%d body=%+v", status, created)
 	}
 
+	var generated struct {
+		Data struct {
+			DeviceID string `json:"device_id"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/devices", token, map[string]any{
+		"name": "Generated Integration Device", "location_name": "Generated Location",
+	}, &generated)
+	if status != http.StatusCreated || !strings.HasPrefix(generated.Data.DeviceID, "FFF-") || len(generated.Data.DeviceID) != 12 {
+		t.Fatalf("create generated device status=%d body=%+v", status, generated)
+	}
+
 	var deviceStatus struct {
 		Data struct {
 			RiskLevel string `json:"risk_level"`

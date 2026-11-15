@@ -68,8 +68,8 @@ func envOr(key, def string) string {
 func main() {
 	device := flag.String("device", envOr("DEVICE_ID", "FFF-VIRTUAL-DEVICE"), "device id")
 	broker := flag.String("broker", envOr("MQTT_BROKER", "tcp://localhost:1883"), "mqtt broker url")
-	username := flag.String("username", envOr("MQTT_USERNAME", envOr("DEVICE_ID", "FFF-VIRTUAL-DEVICE")), "mqtt username")
-	password := flag.String("password", envOr("MQTT_PASSWORD", "device123"), "mqtt password")
+	username := flag.String("username", envOr("MQTT_DEVICE_USERNAME", ""), "shared mqtt device username")
+	password := flag.String("password", envOr("MQTT_DEVICE_PASSWORD", ""), "shared mqtt device password")
 	prefix := flag.String("prefix", envOr("MQTT_TOPIC_PREFIX", "fire-free-forest"), "mqtt topic prefix")
 	envInterval := flag.Duration("env-interval", 15*time.Minute, "environment telemetry interval")
 	fireInterval := flag.Duration("fire-interval", 5*time.Second, "fire telemetry interval")
@@ -79,6 +79,10 @@ func main() {
 	humidity := flag.Float64("humidity", 65, "baseline humidity percent")
 	soil := flag.Float64("soil", 640, "baseline soil sensor ADC (0-1023)")
 	flag.Parse()
+	if *device == "" || *username == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "-device, shared MQTT username, and password are required; use make run-sim to load .env")
+		os.Exit(2)
+	}
 
 	log := logger.New("info", "text")
 
@@ -91,7 +95,7 @@ func main() {
 
 	opts := paho.NewClientOptions().
 		AddBroker(*broker).
-		SetClientID("sim-" + *device).
+		SetClientID(*device).
 		SetUsername(*username).
 		SetPassword(*password).
 		SetAutoReconnect(true).

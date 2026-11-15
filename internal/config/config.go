@@ -21,6 +21,10 @@ type Config struct {
 	RedisPassword string
 	RedisDB       int
 
+	GeocodeBaseURL   string
+	GeocodeUserAgent string
+	GeocodeCacheTTL  time.Duration
+
 	MQTTBroker      string
 	MQTTClientID    string
 	MQTTUsername    string
@@ -76,6 +80,10 @@ func Load() (*Config, error) {
 		RedisAddr:     env("REDIS_ADDR", "localhost:6379"),
 		RedisPassword: env("REDIS_PASSWORD", ""),
 		RedisDB:       envInt("REDIS_DB", 0),
+
+		GeocodeBaseURL:   env("GEOCODE_BASE_URL", "https://nominatim.openstreetmap.org"),
+		GeocodeUserAgent: env("GEOCODE_USER_AGENT", "FireFreeForest/1.0"),
+		GeocodeCacheTTL:  envDuration("GEOCODE_CACHE_TTL", 30*24*time.Hour),
 
 		MQTTBroker:      env("MQTT_BROKER", "tcp://localhost:1883"),
 		MQTTClientID:    env("MQTT_CLIENT_ID", ""),
