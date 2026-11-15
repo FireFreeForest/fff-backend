@@ -33,6 +33,7 @@ type firePayload struct {
 	DeviceID string `json:"device_id"`
 	Sensors  struct {
 		FlameDetected *bool `json:"flame_detected"`
+		FlameLevel    *int  `json:"flame_level"`
 		SmokeLevel    *int  `json:"smoke_level"`
 	} `json:"sensors"`
 	Actuators struct {
@@ -73,7 +74,7 @@ func (w *Worker) process(kind string, msg paho.Message, fn processor) {
 	defer cancel()
 
 	status := "ok"
-	deviceID, ok := topicDeviceID(msg.Topic())
+	deviceID, ok := topicDeviceID(msg.Topic(), w.cfg.MQTTTopicPrefix)
 	if !ok {
 		status = "rejected_topic"
 		w.log.Warn("rejected mqtt topic", "topic", msg.Topic())
@@ -89,9 +90,9 @@ func (w *Worker) process(kind string, msg paho.Message, fn processor) {
 	observability.MQTTIngestDuration.WithLabelValues(kind).Observe(time.Since(start).Seconds())
 }
 
-func topicDeviceID(topic string) (string, bool) {
+func topicDeviceID(topic, prefix string) (string, bool) {
 	parts := strings.Split(topic, "/")
-	if len(parts) < 3 || parts[0] != "free-flame-forest" {
+	if len(parts) < 3 || parts[0] != prefix {
 		return "", false
 	}
 	deviceID := strings.TrimSpace(parts[1])
@@ -135,28 +136,28 @@ func (w *Worker) processEnvironment(ctx context.Context, topicDeviceID string, p
 		w.emitSensorError(ctx, device, "device_id_mismatch", "device_id pada payload tidak sesuai dengan topik MQTT.")
 		return nil
 	}
-	if p.Sensors.Temperature == nil || p.Sensors.Humidity == nil || p.Sensors.SoilMoisture == nil {
-		w.emitSensorError(ctx, device, "payload_incomplete", "Data sensor lingkungan tidak lengkap.")
+	if p.Sensors.SoilMoisture == nil {
+		w.emitSensorError(ctx, device, "payload_incomplete", "Data kelembapan tanah tidak tersedia.")
 		return nil
 	}
-	if *p.Sensors.Temperature < -10 || *p.Sensors.Temperature > 80 {
+	if p.Sensors.Temperature != nil && (*p.Sensors.Temperature < -10 || *p.Sensors.Temperature > 80) {
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Suhu tidak valid: %.2f", *p.Sensors.Temperature))
 		return nil
 	}
-	if *p.Sensors.Humidity < 0 || *p.Sensors.Humidity > 100 {
+	if p.Sensors.Humidity != nil && (*p.Sensors.Humidity < 0 || *p.Sensors.Humidity > 100) {
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Kelembapan udara tidak valid: %.2f", *p.Sensors.Humidity))
 		return nil
 	}
-	if *p.Sensors.SoilMoisture < 0 || *p.Sensors.SoilMoisture > 100 {
-		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Kelembapan tanah tidak valid: %.2f", *p.Sensors.SoilMoisture))
+	if *p.Sensors.SoilMoisture < 0 || *p.Sensors.SoilMoisture > 1023 {
+		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Nilai tanah tidak valid: %.2f", *p.Sensors.SoilMoisture))
 		return nil
 	}
 
 	now := time.Now().UTC()
 	tel := &domain.TelemetryEnvironment{
 		DeviceID:     device.ID,
-		Temperature:  *p.Sensors.Temperature,
-		Humidity:     *p.Sensors.Humidity,
+		Temperature:  p.Sensors.Temperature,
+		Humidity:     p.Sensors.Humidity,
 		SoilMoisture: *p.Sensors.SoilMoisture,
 		RecordedAt:   parseRecordedAt(p.Timestamp),
 		ReceivedAt:   now,
@@ -207,8 +208,12 @@ func (w *Worker) processFire(ctx context.Context, topicDeviceID string, payload 
 		w.emitSensorError(ctx, device, "payload_incomplete", "Data sensor api/asap tidak lengkap.")
 		return nil
 	}
-	if *p.Sensors.SmokeLevel < 0 || *p.Sensors.SmokeLevel > 4095 {
+	if *p.Sensors.SmokeLevel < 0 || *p.Sensors.SmokeLevel > 1023 {
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Kadar asap tidak valid: %d", *p.Sensors.SmokeLevel))
+		return nil
+	}
+	if p.Sensors.FlameLevel != nil && (*p.Sensors.FlameLevel < 0 || *p.Sensors.FlameLevel > 1023) {
+		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Nilai api tidak valid: %d", *p.Sensors.FlameLevel))
 		return nil
 	}
 
@@ -225,6 +230,7 @@ func (w *Worker) processFire(ctx context.Context, topicDeviceID string, payload 
 	tel := &domain.TelemetryFire{
 		DeviceID:      device.ID,
 		FlameDetected: *p.Sensors.FlameDetected,
+		FlameLevel:    p.Sensors.FlameLevel,
 		SmokeLevel:    *p.Sensors.SmokeLevel,
 		Pump:          pump,
 		Buzzer:        buzzer,

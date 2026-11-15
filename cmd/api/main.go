@@ -72,7 +72,7 @@ func run() error {
 	if err := seedDevice(ctx, cfg, repo, log); err != nil {
 		return err
 	}
-	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax)
+	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax, cfg.MQTTTopicPrefix)
 
 	hub := ws.NewHub(log)
 	go hub.Run(ctx)

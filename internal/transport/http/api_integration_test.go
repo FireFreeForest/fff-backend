@@ -68,7 +68,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 	if err := auth.SeedAdmin(context.Background()); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
-	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax)
+	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax, cfg.MQTTTopicPrefix)
 	risk := service.NewRiskEngine(repo, rdb, commands, cfg, log)
 
 	ctx, cancel := context.WithCancel(context.Background())

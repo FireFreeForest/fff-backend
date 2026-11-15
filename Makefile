@@ -26,10 +26,11 @@ SIM_ARGS ?= -fire
 run-sim:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	$(GO) run ./cmd/simulator \
-		-device "$${SEED_DEVICE_ID:-DEVICE-123}" \
+		-device "$${SEED_DEVICE_ID:-FFF-VIRTUAL-DEVICE}" \
 		-broker "$${MQTT_BROKER:-tcp://localhost:1883}" \
-		-username "$${MQTT_DEVICE_USERNAME:-DEVICE-123}" \
+		-username "$${MQTT_DEVICE_USERNAME:-FFF-VIRTUAL-DEVICE}" \
 		-password "$${MQTT_DEVICE_PASSWORD:-device123}" \
+		-prefix "$${MQTT_TOPIC_PREFIX:-fire-free-forest}" \
 		$(SIM_ARGS)
 
 up:

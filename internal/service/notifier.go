@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"firefreeforest/backend/internal/domain"
 	"firefreeforest/backend/internal/observability"
@@ -12,14 +13,33 @@ import (
 )
 
 type Notifier struct {
-	fcm         *fcm.Client
-	repo        *repository.Repository
-	log         *slog.Logger
-	minSeverity domain.Severity
+	fcm          *fcm.Client
+	repo         *repository.Repository
+	log          *slog.Logger
+	minSeverity  domain.Severity
+	allowedTypes map[domain.EventType]struct{}
 }
 
-func NewNotifier(fcmClient *fcm.Client, repo *repository.Repository, minSeverity domain.Severity, log *slog.Logger) *Notifier {
-	return &Notifier{fcm: fcmClient, repo: repo, log: log, minSeverity: minSeverity}
+func NewNotifier(fcmClient *fcm.Client, repo *repository.Repository, minSeverity domain.Severity, eventTypes []string, log *slog.Logger) *Notifier {
+	allowed := make(map[domain.EventType]struct{}, len(eventTypes))
+	for _, raw := range eventTypes {
+		eventType := domain.EventType(strings.ToUpper(strings.TrimSpace(raw)))
+		if domain.ValidEventType(eventType) {
+			allowed[eventType] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
+		allowed = nil
+	}
+	return &Notifier{fcm: fcmClient, repo: repo, log: log, minSeverity: minSeverity, allowedTypes: allowed}
+}
+
+func (n *Notifier) allowsEvent(eventType domain.EventType) bool {
+	if len(n.allowedTypes) == 0 {
+		return true
+	}
+	_, ok := n.allowedTypes[eventType]
+	return ok
 }
 
 func (n *Notifier) NotifyEvent(ctx context.Context, device *domain.Device, ev *domain.Event) {
@@ -27,6 +47,9 @@ func (n *Notifier) NotifyEvent(ctx context.Context, device *domain.Device, ev *d
 		return
 	}
 	if domain.SeverityRank(ev.Severity) < domain.SeverityRank(n.minSeverity) {
+		return
+	}
+	if !n.allowsEvent(ev.EventType) {
 		return
 	}
 
@@ -44,6 +67,7 @@ func (n *Notifier) NotifyEvent(ctx context.Context, device *domain.Device, ev *d
 	}
 
 	title, body := notificationText(device, ev)
+	channelID, sound := notificationChannel(ev.EventType)
 	data := map[string]string{
 		"event_id":     ev.ID.String(),
 		"device_id":    device.DeviceID,
@@ -53,7 +77,7 @@ func (n *Notifier) NotifyEvent(ctx context.Context, device *domain.Device, ev *d
 		"triggered_at": ev.TriggeredAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
-	invalid, sent, err := n.fcm.Send(ctx, values, title, body, data)
+	invalid, sent, err := n.fcm.Send(ctx, values, title, body, channelID, sound, data)
 	if err != nil {
 		n.log.Warn("fcm send partially failed", "device_id", device.DeviceID, "event_type", ev.EventType, "error", err)
 		observability.NotificationsSent.WithLabelValues("error").Inc()
@@ -81,6 +105,9 @@ func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device
 		return false
 	}
 	if domain.SeverityRank(ev.Severity) < domain.SeverityRank(n.minSeverity) {
+		return false
+	}
+	if !n.allowsEvent(ev.EventType) {
 		return false
 	}
 
@@ -111,6 +138,7 @@ func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device
 		notificationType = "fire_escalation"
 	}
 
+	channelID, sound := notificationChannel(ev.EventType)
 	data := map[string]string{
 		"event_id":          ev.ID.String(),
 		"device_id":         device.DeviceID,
@@ -121,7 +149,7 @@ func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device
 		"notification_type": notificationType,
 	}
 
-	invalid, sent, sendErr := n.fcm.Send(ctx, values, title, body, data)
+	invalid, sent, sendErr := n.fcm.Send(ctx, values, title, body, channelID, sound, data)
 	if sendErr != nil {
 		n.log.Warn("fire follow-up FCM partially failed", "event_id", ev.ID, "notification_type", notificationType, "sent", sent, "error", sendErr)
 		observability.NotificationsSent.WithLabelValues("error").Inc()
@@ -136,6 +164,17 @@ func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device
 		}
 	}
 	return sent > 0
+}
+
+func notificationChannel(eventType domain.EventType) (string, string) {
+	switch eventType {
+	case domain.EventFireDetected:
+		return "fire_alerts_fire", "notif_fire"
+	case domain.EventSensorError, domain.EventDeviceOffline:
+		return "fire_alerts_error", "notif_sensor_error"
+	default:
+		return "fire_alerts_warning", "notif_smoke"
+	}
 }
 
 func notificationText(device *domain.Device, ev *domain.Event) (string, string) {

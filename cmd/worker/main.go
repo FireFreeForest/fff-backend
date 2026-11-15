@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -60,7 +61,7 @@ func run() error {
 	defer rdb.Close()
 
 	repo := repository.New(db)
-	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax)
+	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax, cfg.MQTTTopicPrefix)
 	riskEngine := service.NewRiskEngine(repo, rdb, commands, cfg, log)
 
 	fcmClient, err := fcm.New(ctx, cfg.FCMCredentialsFile, cfg.FCMProjectID, log)
@@ -68,11 +69,14 @@ func run() error {
 		return err
 	}
 	if fcmClient.Enabled() {
-		log.Info("fcm notifications enabled", "min_severity", cfg.FCMMinSeverity)
+		log.Info("fcm notifications enabled",
+			"min_severity", cfg.FCMMinSeverity,
+			"event_types", strings.Join(cfg.FCMEventTypes, ","),
+		)
 	} else {
 		log.Warn("fcm notifications disabled; set FCM_CREDENTIALS_FILE to enable")
 	}
-	notifier := service.NewNotifier(fcmClient, repo, domain.Severity(cfg.FCMMinSeverity), log)
+	notifier := service.NewNotifier(fcmClient, repo, domain.Severity(cfg.FCMMinSeverity), cfg.FCMEventTypes, log)
 
 	clientID := cfg.MQTTClientID
 	if clientID == "" {

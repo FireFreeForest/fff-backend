@@ -33,10 +33,12 @@ fi
 "${COMPOSE[@]}" exec -T -u 1883 mosquitto sh -c 'chmod 600 /mosquitto/data/passwd /mosquitto/data/acl'
 "${COMPOSE[@]}" kill -s HUP mosquitto
 
+PREFIX="${MQTT_TOPIC_PREFIX:-fire-free-forest}"
+
 echo "provisioned MQTT user $DEVICE_ID"
 echo "topics:"
-echo "  free-flame-forest/$DEVICE_ID/telemetry/environment"
-echo "  free-flame-forest/$DEVICE_ID/telemetry/fire"
-echo "  free-flame-forest/$DEVICE_ID/event"
-echo "  free-flame-forest/$DEVICE_ID/command/ack"
-echo "  free-flame-forest/$DEVICE_ID/command (subscribe)"
+echo "  $PREFIX/$DEVICE_ID/telemetry/environment"
+echo "  $PREFIX/$DEVICE_ID/telemetry/fire"
+echo "  $PREFIX/$DEVICE_ID/event"
+echo "  $PREFIX/$DEVICE_ID/command/ack"
+echo "  $PREFIX/$DEVICE_ID/command (subscribe)"

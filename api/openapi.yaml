@@ -35,9 +35,10 @@ tags:
       1. `POST /realtime/ticket` dengan Bearer token.
       2. Koneksi ke `ws://<host>/api/v1/ws?ticket=<ticket>&device_id=<opsional>`.
 
-      Pesan memakai envelope `{type, device_id, data, timestamp}` dengan tipe:
+      Pesan memakai envelope `{type, device_id, data, ts}` dengan tipe:
       `connected`, `telemetry.environment`, `telemetry.fire`, `event.created`,
-      `event.updated`, `event.resolved`, `risk.updated`, `command.updated`.
+      `event.resolved`, `risk.updated`, `device.status`, `command.issued`,
+      `command.ack`, `command.timeout`.
 
 paths:
   /auth/login:
@@ -508,7 +509,7 @@ paths:
                       minimum: 1
                       maximum: 300
                       default: 30
-                      description: Batas atas mengikuti konfigurasi AUTO_PUMP_MAX_SECONDS.
+                      description: Batas atas mengikuti konfigurasi AUTO_PUMP_MAX_DURATION.
       responses:
         "200":
           description: Replay command yang sama untuk Idempotency-Key yang sudah selesai
@@ -580,7 +581,15 @@ paths:
           schema: { type: string, enum: [active, acknowledged, resolved] }
         - name: event_type
           in: query
-          schema: { type: string }
+          schema:
+            type: string
+            enum:
+              - FIRE_DETECTED
+              - SMOKE_DETECTED
+              - TEMPERATURE_HIGH
+              - SOIL_DRY
+              - DEVICE_OFFLINE
+              - SENSOR_ERROR
         - name: device_id
           in: query
           schema: { type: string }
@@ -892,9 +901,23 @@ components:
       properties:
         id: { type: integer, format: int64, readOnly: true }
         device_id: { type: string, format: uuid, description: "ID internal device (UUID), bukan kode device_id" }
-        temperature: { type: number }
-        humidity: { type: number }
-        soil_moisture: { type: number }
+        temperature:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 60
+          description: "Opsional; dihilangkan saat sensor DHT11 error."
+        humidity:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: "Opsional; dihilangkan saat sensor DHT11 error."
+        soil_moisture:
+          type: number
+          minimum: 0
+          maximum: 1023
+          description: "Nilai mentah ADC sensor tanah."
         recorded_at: { type: string, format: date-time }
         received_at: { type: string, format: date-time }
 
@@ -904,7 +927,17 @@ components:
         id: { type: integer, format: int64, readOnly: true }
         device_id: { type: string, format: uuid, description: "ID internal device (UUID), bukan kode device_id" }
         flame_detected: { type: boolean }
-        smoke_level: { type: integer }
+        flame_level:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 1023
+          description: "Nilai mentah ADC sensor api; opsional."
+        smoke_level:
+          type: integer
+          minimum: 0
+          maximum: 1023
+          description: "Nilai mentah ADC sensor MQ-2."
         pump: { type: boolean }
         buzzer: { type: boolean }
         recorded_at: { type: string, format: date-time }
@@ -915,7 +948,15 @@ components:
       properties:
         id: { type: string, format: uuid }
         device_id: { type: string, format: uuid }
-        event_type: { type: string }
+        event_type:
+          type: string
+          enum:
+            - FIRE_DETECTED
+            - SMOKE_DETECTED
+            - TEMPERATURE_HIGH
+            - SOIL_DRY
+            - DEVICE_OFFLINE
+            - SENSOR_ERROR
         severity: { type: string, enum: [error, warning, critical] }
         source: { type: string }
         message: { type: string }

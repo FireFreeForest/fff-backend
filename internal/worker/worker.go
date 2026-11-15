@@ -72,14 +72,15 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) SubscribeAll() {
 	qos := byte(w.cfg.MQTTQoS)
+	prefix := w.cfg.MQTTTopicPrefix
 	topics := []struct {
 		topic   string
 		handler paho.MessageHandler
 	}{
-		{"free-flame-forest/+/telemetry/environment", w.handleEnvironment},
-		{"free-flame-forest/+/telemetry/fire", w.handleFire},
-		{"free-flame-forest/+/event", w.handleDeviceEvent},
-		{"free-flame-forest/+/command/ack", w.handleCommandAck},
+		{prefix + "/+/telemetry/environment", w.handleEnvironment},
+		{prefix + "/+/telemetry/fire", w.handleFire},
+		{prefix + "/+/event", w.handleDeviceEvent},
+		{prefix + "/+/command/ack", w.handleCommandAck},
 	}
 	for _, sub := range topics {
 		w.subscribe(sub.topic, qos, sub.handler)

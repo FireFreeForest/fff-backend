@@ -24,14 +24,18 @@ type CommandService struct {
 	rdb         *goredis.Client
 	log         *slog.Logger
 	maxDuration int
+	topicPrefix string
 }
 
-func NewCommandService(repo *repository.Repository, rdb *goredis.Client, log *slog.Logger, maxDuration time.Duration) *CommandService {
+func NewCommandService(repo *repository.Repository, rdb *goredis.Client, log *slog.Logger, maxDuration time.Duration, topicPrefix string) *CommandService {
 	seconds := int(maxDuration.Seconds())
 	if seconds <= 0 {
 		seconds = 300
 	}
-	return &CommandService{repo: repo, rdb: rdb, log: log, maxDuration: seconds}
+	if topicPrefix == "" {
+		topicPrefix = "fire-free-forest"
+	}
+	return &CommandService{repo: repo, rdb: rdb, log: log, maxDuration: seconds, topicPrefix: topicPrefix}
 }
 
 type IssueCommandRequest struct {
@@ -91,7 +95,7 @@ func (s *CommandService) Issue(ctx context.Context, device *domain.Device, req I
 		}
 		ob := &domain.Outbox{
 			ID:            uuid.New(),
-			Topic:         fmt.Sprintf("free-flame-forest/%s/command", device.DeviceID),
+			Topic:         fmt.Sprintf("%s/%s/command", s.topicPrefix, device.DeviceID),
 			Payload:       mqttPayload,
 			QoS:           1,
 			AggregateType: "command",

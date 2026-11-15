@@ -1,0 +1,11 @@
+{
+	email {$ACME_EMAIL:admin@example.com}
+}
+
+{$API_DOMAIN:api.example.com} {
+	reverse_proxy api:8080
+}
+
+{$MQTT_DOMAIN:mqtt.example.com} {
+	reverse_proxy mosquitto:9001
+}

@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"firefreeforest/backend/internal/domain"
 )
 
 type Config struct {
@@ -19,11 +21,12 @@ type Config struct {
 	RedisPassword string
 	RedisDB       int
 
-	MQTTBroker   string
-	MQTTClientID string
-	MQTTUsername string
-	MQTTPassword string
-	MQTTQoS      int
+	MQTTBroker      string
+	MQTTClientID    string
+	MQTTUsername    string
+	MQTTPassword    string
+	MQTTQoS         int
+	MQTTTopicPrefix string
 
 	JWTSecret  string
 	AccessTTL  time.Duration
@@ -40,7 +43,7 @@ type Config struct {
 	SeedDeviceName      string
 
 	TemperatureHighC float64
-	SoilDryPct       float64
+	SoilDryADC       float64
 	SmokeLevelMax    int
 	EventCooldown    time.Duration
 	FireCooldown     time.Duration
@@ -59,6 +62,7 @@ type Config struct {
 	FCMCredentialsFile string
 	FCMProjectID       string
 	FCMMinSeverity     string
+	FCMEventTypes      []string
 }
 
 func Load() (*Config, error) {
@@ -73,11 +77,12 @@ func Load() (*Config, error) {
 		RedisPassword: env("REDIS_PASSWORD", ""),
 		RedisDB:       envInt("REDIS_DB", 0),
 
-		MQTTBroker:   env("MQTT_BROKER", "tcp://localhost:1883"),
-		MQTTClientID: env("MQTT_CLIENT_ID", ""),
-		MQTTUsername: env("MQTT_USERNAME", "backend"),
-		MQTTPassword: env("MQTT_PASSWORD", "change-me-backend"),
-		MQTTQoS:      envInt("MQTT_QOS", 1),
+		MQTTBroker:      env("MQTT_BROKER", "tcp://localhost:1883"),
+		MQTTClientID:    env("MQTT_CLIENT_ID", ""),
+		MQTTUsername:    env("MQTT_USERNAME", "backend"),
+		MQTTPassword:    env("MQTT_PASSWORD", "change-me-backend"),
+		MQTTQoS:         envInt("MQTT_QOS", 1),
+		MQTTTopicPrefix: env("MQTT_TOPIC_PREFIX", "fire-free-forest"),
 
 		JWTSecret:  env("JWT_SECRET", ""),
 		AccessTTL:  envDuration("JWT_ACCESS_TTL", 15*time.Minute),
@@ -90,16 +95,16 @@ func Load() (*Config, error) {
 		SeedAdminEmail:      env("SEED_ADMIN_EMAIL", "admin@fff.local"),
 		SeedAdminPassword:   env("SEED_ADMIN_PASSWORD", "admin12345"),
 		SeedAdminName:       env("SEED_ADMIN_NAME", "Administrator"),
-		SeedDeviceID:        env("SEED_DEVICE_ID", "DEVICE-123"),
+		SeedDeviceID:        env("SEED_DEVICE_ID", "FFF-VIRTUAL-DEVICE"),
 		SeedDeviceName:      env("SEED_DEVICE_NAME", "Simulator Device"),
 
 		TemperatureHighC: envFloat("THRESHOLD_TEMPERATURE_HIGH_C", 40),
-		SoilDryPct:       envFloat("THRESHOLD_SOIL_DRY_PCT", 30),
-		SmokeLevelMax:    envInt("THRESHOLD_SMOKE_LEVEL", 300),
+		SoilDryADC:       envFloat("THRESHOLD_SOIL_DRY_ADC", 300),
+		SmokeLevelMax:    envInt("THRESHOLD_SMOKE_LEVEL", 500),
 		EventCooldown:    envDuration("EVENT_COOLDOWN", 5*time.Minute),
 		FireCooldown:     envDuration("FIRE_EVENT_COOLDOWN", time.Minute),
 
-		AutoPumpEnabled:  envBool("AUTO_PUMP_ENABLED", true),
+		AutoPumpEnabled:  envBool("AUTO_PUMP_ENABLED", false),
 		AutoPumpDuration: envDuration("AUTO_PUMP_DURATION", 30*time.Second),
 		AutoPumpCooldown: envDuration("AUTO_PUMP_COOLDOWN", 5*time.Minute),
 		AutoPumpMax:      envDuration("AUTO_PUMP_MAX_DURATION", 300*time.Second),
@@ -112,7 +117,11 @@ func Load() (*Config, error) {
 
 		FCMCredentialsFile: env("FCM_CREDENTIALS_FILE", ""),
 		FCMProjectID:       env("FCM_PROJECT_ID", ""),
-		FCMMinSeverity:     env("FCM_MIN_SEVERITY", "critical"),
+		FCMMinSeverity:     env("FCM_MIN_SEVERITY", "error"),
+		FCMEventTypes: envCSV(
+			"FCM_EVENT_TYPES",
+			"FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR",
+		),
 	}
 
 	if cfg.DBDSN == "" {
@@ -127,6 +136,9 @@ func Load() (*Config, error) {
 	if cfg.MQTTQoS < 0 || cfg.MQTTQoS > 2 {
 		return nil, fmt.Errorf("MQTT_QOS must be 0, 1, or 2")
 	}
+	if cfg.MQTTTopicPrefix == "" || strings.ContainsAny(cfg.MQTTTopicPrefix, "/+#") {
+		return nil, fmt.Errorf("MQTT_TOPIC_PREFIX must be a non-empty single topic segment")
+	}
 	if cfg.AutoPumpDuration <= 0 || cfg.AutoPumpDuration > cfg.AutoPumpMax {
 		return nil, fmt.Errorf("AUTO_PUMP_DURATION must be between 1s and AUTO_PUMP_MAX_DURATION")
 	}
@@ -139,6 +151,22 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("FCM_MIN_SEVERITY must be error, warning, or critical")
 	}
 	cfg.FCMMinSeverity = strings.ToLower(cfg.FCMMinSeverity)
+
+	normalizedEvents := make([]string, 0, len(cfg.FCMEventTypes))
+	seenEvents := make(map[domain.EventType]struct{}, len(cfg.FCMEventTypes))
+	for _, raw := range cfg.FCMEventTypes {
+		eventType := domain.EventType(strings.ToUpper(strings.TrimSpace(raw)))
+		if !domain.ValidEventType(eventType) {
+			return nil, fmt.Errorf("FCM_EVENT_TYPES contains invalid event type %q", raw)
+		}
+		if _, seen := seenEvents[eventType]; seen {
+			continue
+		}
+		seenEvents[eventType] = struct{}{}
+		normalizedEvents = append(normalizedEvents, string(eventType))
+	}
+	cfg.FCMEventTypes = normalizedEvents
+
 	return cfg, nil
 }
 

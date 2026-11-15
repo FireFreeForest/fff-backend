@@ -8,8 +8,8 @@ import (
 
 func environment(temperature, humidity, soil float64) *domain.TelemetryEnvironment {
 	return &domain.TelemetryEnvironment{
-		Temperature:  temperature,
-		Humidity:     humidity,
+		Temperature:  &temperature,
+		Humidity:     &humidity,
 		SoilMoisture: soil,
 	}
 }
@@ -19,7 +19,7 @@ func fire(flame bool, smoke int) *domain.TelemetryFire {
 }
 
 func TestEvaluateConditions(t *testing.T) {
-	th := Thresholds{TemperatureHighC: 40, SoilDryPct: 30, SmokeLevelMax: 300}
+	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500}
 
 	tests := []struct {
 		name      string
@@ -29,43 +29,49 @@ func TestEvaluateConditions(t *testing.T) {
 	}{
 		{
 			name:      "normal when all sensors below thresholds",
-			state:     LatestState{Environment: environment(31, 60, 55), Fire: fire(false, 120)},
+			state:     LatestState{Environment: environment(31, 60, 640), Fire: fire(false, 120)},
 			wantLevel: RiskNormal,
 		},
 		{
-			name:      "temperature above threshold is waspada",
-			state:     LatestState{Environment: environment(42, 40, 55), Fire: fire(false, 120)},
+			name:      "temperature at website threshold is waspada",
+			state:     LatestState{Environment: environment(40, 40, 640), Fire: fire(false, 120)},
 			wantLevel: RiskWaspada,
 			wantEvent: []domain.EventType{domain.EventTemperatureHigh},
 		},
 		{
 			name:      "two warnings become bahaya",
-			state:     LatestState{Environment: environment(42, 40, 20), Fire: fire(false, 120)},
+			state:     LatestState{Environment: environment(40, 40, 20), Fire: fire(false, 120)},
 			wantLevel: RiskBahaya,
 			wantEvent: []domain.EventType{domain.EventTemperatureHigh, domain.EventSoilDry},
 		},
 		{
 			name:      "flame detected is darurat",
-			state:     LatestState{Environment: environment(31, 60, 55), Fire: fire(true, 120)},
+			state:     LatestState{Environment: environment(31, 60, 640), Fire: fire(true, 120)},
 			wantLevel: RiskDarurat,
 			wantEvent: []domain.EventType{domain.EventFireDetected},
 		},
 		{
-			name:      "smoke above threshold is warning",
-			state:     LatestState{Environment: environment(31, 60, 55), Fire: fire(false, 450)},
+			name:      "smoke at website threshold is warning",
+			state:     LatestState{Environment: environment(31, 60, 640), Fire: fire(false, 500)},
 			wantLevel: RiskWaspada,
 			wantEvent: []domain.EventType{domain.EventSmokeDetected},
 		},
 		{
-			name:      "exact threshold is not active",
-			state:     LatestState{Environment: environment(40, 60, 30), Fire: fire(false, 300)},
-			wantLevel: RiskNormal,
+			name:      "exact website thresholds are active",
+			state:     LatestState{Environment: environment(40, 60, 640), Fire: fire(false, 500)},
+			wantLevel: RiskBahaya,
+			wantEvent: []domain.EventType{domain.EventTemperatureHigh, domain.EventSmokeDetected},
 		},
 		{
 			name:      "fire only without environment still evaluates",
 			state:     LatestState{Fire: fire(true, 900)},
 			wantLevel: RiskDarurat,
 			wantEvent: []domain.EventType{domain.EventFireDetected, domain.EventSmokeDetected},
+		},
+		{
+			name:      "partial environment from sensor error is accepted",
+			state:     LatestState{Environment: &domain.TelemetryEnvironment{SoilMoisture: 640}, Fire: fire(false, 120)},
+			wantLevel: RiskNormal,
 		},
 	}
 
@@ -94,7 +100,7 @@ func TestEvaluateConditions(t *testing.T) {
 }
 
 func TestEvaluateConditionsSeverity(t *testing.T) {
-	th := Thresholds{TemperatureHighC: 40, SoilDryPct: 30, SmokeLevelMax: 300}
+	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500}
 	conditions, _ := EvaluateConditions(LatestState{
 		Environment: environment(45, 30, 10),
 		Fire:        fire(true, 800),

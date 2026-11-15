@@ -63,7 +63,7 @@ type sendResponse struct {
 	} `json:"error"`
 }
 
-func (c *Client) Send(ctx context.Context, tokens []string, title, body string, data map[string]string) ([]string, int, error) {
+func (c *Client) Send(ctx context.Context, tokens []string, title, body, channelID, sound string, data map[string]string) ([]string, int, error) {
 	if !c.Enabled() || len(tokens) == 0 {
 		return nil, 0, nil
 	}
@@ -73,7 +73,7 @@ func (c *Client) Send(ctx context.Context, tokens []string, title, body string, 
 	var firstErr error
 
 	for _, token := range tokens {
-		ok, invalidToken, err := c.sendOne(ctx, token, title, body, data)
+		ok, invalidToken, err := c.sendOne(ctx, token, title, body, channelID, sound, data)
 
 		if invalidToken {
 			invalid = append(invalid, token)
@@ -96,7 +96,14 @@ func (c *Client) Send(ctx context.Context, tokens []string, title, body string, 
 	return invalid, sent, firstErr
 }
 
-func (c *Client) sendOne(ctx context.Context, token, title, body string, data map[string]string) (bool, bool, error) {
+func (c *Client) sendOne(ctx context.Context, token, title, body, channelID, sound string, data map[string]string) (bool, bool, error) {
+	androidNotification := map[string]any{
+		"channel_id": channelID,
+	}
+	if sound != "" {
+		androidNotification["sound"] = sound
+	}
+
 	payload := map[string]any{
 		"message": map[string]any{
 			"token": token,
@@ -106,10 +113,8 @@ func (c *Client) sendOne(ctx context.Context, token, title, body string, data ma
 			},
 			"data": data,
 			"android": map[string]any{
-				"priority": "high",
-				"notification": map[string]any{
-					"channel_id": "fire_alerts",
-				},
+				"priority":     "high",
+				"notification": androidNotification,
 			},
 		},
 	}

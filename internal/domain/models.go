@@ -150,8 +150,8 @@ type Device struct {
 type TelemetryEnvironment struct {
 	ID           uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
 	DeviceID     uuid.UUID `gorm:"type:uuid;not null" json:"device_id"`
-	Temperature  float64   `json:"temperature"`
-	Humidity     float64   `json:"humidity"`
+	Temperature  *float64  `json:"temperature"`
+	Humidity     *float64  `json:"humidity"`
 	SoilMoisture float64   `json:"soil_moisture"`
 	RecordedAt   time.Time `json:"recorded_at"`
 	ReceivedAt   time.Time `json:"received_at"`
@@ -163,6 +163,7 @@ type TelemetryFire struct {
 	ID            uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
 	DeviceID      uuid.UUID `gorm:"type:uuid;not null" json:"device_id"`
 	FlameDetected bool      `json:"flame_detected"`
+	FlameLevel    *int      `json:"flame_level,omitempty"`
 	SmokeLevel    int       `json:"smoke_level"`
 	Pump          bool      `json:"pump"`
 	Buzzer        bool      `json:"buzzer"`

@@ -33,7 +33,7 @@ type LatestState struct {
 
 type Thresholds struct {
 	TemperatureHighC float64
-	SoilDryPct       float64
+	SoilDryADC       float64
 	SmokeLevelMax    int
 }
 
@@ -66,7 +66,7 @@ func NewRiskEngine(repo *repository.Repository, rdb *goredis.Client, commands *C
 func (e *RiskEngine) Thresholds() Thresholds {
 	return Thresholds{
 		TemperatureHighC: e.cfg.TemperatureHighC,
-		SoilDryPct:       e.cfg.SoilDryPct,
+		SoilDryADC:       e.cfg.SoilDryADC,
 		SmokeLevelMax:    e.cfg.SmokeLevelMax,
 	}
 }
@@ -75,19 +75,21 @@ func EvaluateConditions(state LatestState, th Thresholds) ([]ConditionResult, st
 	results := make([]ConditionResult, 0, 4)
 
 	if env := state.Environment; env != nil {
+		temperatureHigh := env.Temperature != nil && *env.Temperature >= th.TemperatureHighC
 		results = append(results, ConditionResult{
 			Type:     domain.EventTemperatureHigh,
 			Severity: domain.SeverityWarning,
 			Source:   "dht11",
 			Message:  "Suhu lingkungan melebihi ambang batas.",
-			Active:   env.Temperature > th.TemperatureHighC,
+			Active:   temperatureHigh,
 		})
+		soilDry := th.SoilDryADC > 0 && env.SoilMoisture < th.SoilDryADC
 		results = append(results, ConditionResult{
 			Type:     domain.EventSoilDry,
 			Severity: domain.SeverityWarning,
 			Source:   "soil_sensor",
-			Message:  "Kelembapan tanah di bawah ambang batas.",
-			Active:   env.SoilMoisture < th.SoilDryPct,
+			Message:  "Nilai kelembapan tanah berada di bawah ambang kalibrasi.",
+			Active:   soilDry,
 		})
 	}
 
@@ -104,7 +106,7 @@ func EvaluateConditions(state LatestState, th Thresholds) ([]ConditionResult, st
 			Severity: domain.SeverityWarning,
 			Source:   "mq2_sensor",
 			Message:  "Kadar asap/gas melebihi ambang batas.",
-			Active:   fire.SmokeLevel > th.SmokeLevelMax,
+			Active:   fire.SmokeLevel >= th.SmokeLevelMax,
 		})
 	}
 
@@ -156,7 +158,7 @@ func (e *RiskEngine) RecordFire(ctx context.Context, device *domain.Device, tel 
 	if err != nil {
 		return nil, err
 	}
-	if tel.FlameDetected {
+	if !tel.Pump && (tel.FlameDetected || tel.SmokeLevel >= e.cfg.SmokeLevelMax) {
 		if cmd := e.maybeAutoPump(ctx, device); cmd != nil {
 			res.Commands = append(res.Commands, cmd)
 		}
@@ -284,7 +286,7 @@ func (e *RiskEngine) createEvent(ctx context.Context, device *domain.Device, eve
 
 	ob := &domain.Outbox{
 		ID:            uuid.New(),
-		Topic:         fmt.Sprintf("free-flame-forest/%s/event", device.DeviceID),
+		Topic:         fmt.Sprintf("%s/%s/event", e.cfg.MQTTTopicPrefix, device.DeviceID),
 		Payload:       mqttPayload,
 		QoS:           1,
 		AggregateType: "event",
@@ -455,12 +457,19 @@ func cooldownKey(deviceID string, eventType domain.EventType) string {
 func stateMetadata(state LatestState) map[string]any {
 	meta := map[string]any{}
 	if env := state.Environment; env != nil {
-		meta["temperature"] = env.Temperature
-		meta["humidity"] = env.Humidity
+		if env.Temperature != nil {
+			meta["temperature"] = *env.Temperature
+		}
+		if env.Humidity != nil {
+			meta["humidity"] = *env.Humidity
+		}
 		meta["soil_moisture"] = env.SoilMoisture
 	}
 	if fire := state.Fire; fire != nil {
 		meta["flame_detected"] = fire.FlameDetected
+		if fire.FlameLevel != nil {
+			meta["flame_level"] = *fire.FlameLevel
+		}
 		meta["smoke_level"] = fire.SmokeLevel
 		meta["pump"] = fire.Pump
 	}

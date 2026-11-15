@@ -6,21 +6,23 @@ import (
 )
 
 func TestTopicDeviceID(t *testing.T) {
+	const prefix = "fire-free-forest"
 	tests := []struct {
 		topic  string
 		want   string
 		wantOK bool
 	}{
-		{"free-flame-forest/DEVICE-123/telemetry/fire", "DEVICE-123", true},
-		{"free-flame-forest/abc/event", "abc", true},
-		{"other/DEVICE-123/telemetry/fire", "", false},
-		{"free-flame-forest", "", false},
-		{"free-flame-forest//event", "", false},
-		{"free-flame-forest/+/event", "", false},
-		{"free-flame-forest/DEV#/event", "", false},
+		{"fire-free-forest/FFF-VIRTUAL-DEVICE/telemetry/fire", "FFF-VIRTUAL-DEVICE", true},
+		{"fire-free-forest/abc/event", "abc", true},
+		{"free-flame-forest/FFF-VIRTUAL-DEVICE/telemetry/fire", "", false},
+		{"other/FFF-VIRTUAL-DEVICE/telemetry/fire", "", false},
+		{"fire-free-forest", "", false},
+		{"fire-free-forest//event", "", false},
+		{"fire-free-forest/+/event", "", false},
+		{"fire-free-forest/DEV#/event", "", false},
 	}
 	for _, tc := range tests {
-		got, ok := topicDeviceID(tc.topic)
+		got, ok := topicDeviceID(tc.topic, prefix)
 		if got != tc.want || ok != tc.wantOK {
 			t.Errorf("topicDeviceID(%q) = %q,%v want %q,%v", tc.topic, got, ok, tc.want, tc.wantOK)
 		}

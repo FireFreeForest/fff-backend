@@ -31,6 +31,7 @@ type firePayload struct {
 	DeviceID string `json:"device_id"`
 	Sensors  struct {
 		FlameDetected bool `json:"flame_detected"`
+		FlameLevel    int  `json:"flame_level"`
 		SmokeLevel    int  `json:"smoke_level"`
 	} `json:"sensors"`
 	Actuators struct {
@@ -65,17 +66,18 @@ func envOr(key, def string) string {
 }
 
 func main() {
-	device := flag.String("device", envOr("DEVICE_ID", "DEVICE-123"), "device id")
+	device := flag.String("device", envOr("DEVICE_ID", "FFF-VIRTUAL-DEVICE"), "device id")
 	broker := flag.String("broker", envOr("MQTT_BROKER", "tcp://localhost:1883"), "mqtt broker url")
-	username := flag.String("username", envOr("MQTT_USERNAME", envOr("DEVICE_ID", "DEVICE-123")), "mqtt username")
+	username := flag.String("username", envOr("MQTT_USERNAME", envOr("DEVICE_ID", "FFF-VIRTUAL-DEVICE")), "mqtt username")
 	password := flag.String("password", envOr("MQTT_PASSWORD", "device123"), "mqtt password")
+	prefix := flag.String("prefix", envOr("MQTT_TOPIC_PREFIX", "fire-free-forest"), "mqtt topic prefix")
 	envInterval := flag.Duration("env-interval", 15*time.Minute, "environment telemetry interval")
 	fireInterval := flag.Duration("fire-interval", 5*time.Second, "fire telemetry interval")
 	flame := flag.Bool("fire", false, "simulate flame detected")
-	smoke := flag.Int("smoke", 120, "baseline smoke level (0-4095)")
-	temp := flag.Float64("temp", 32.5, "baseline temperature celsius")
-	humidity := flag.Float64("humidity", 68.2, "baseline humidity percent")
-	soil := flag.Float64("soil", 50, "baseline soil moisture percent")
+	smoke := flag.Int("smoke", 180, "baseline smoke level (0-1023)")
+	temp := flag.Float64("temp", 28, "baseline temperature celsius")
+	humidity := flag.Float64("humidity", 65, "baseline humidity percent")
+	soil := flag.Float64("soil", 640, "baseline soil sensor ADC (0-1023)")
 	flag.Parse()
 
 	log := logger.New("info", "text")
@@ -105,8 +107,8 @@ func main() {
 	defer client.Disconnect(250)
 	log.Info("simulator connected", "broker", *broker, "device_id", *device)
 
-	commandTopic := fmt.Sprintf("free-flame-forest/%s/command", *device)
-	ackTopic := fmt.Sprintf("free-flame-forest/%s/command/ack", *device)
+	commandTopic := fmt.Sprintf("%s/%s/command", *prefix, *device)
+	ackTopic := fmt.Sprintf("%s/%s/command/ack", *prefix, *device)
 
 	commandHandler := func(_ paho.Client, msg paho.Message) {
 		var cmd commandMessage
@@ -155,9 +157,9 @@ func main() {
 		p.DeviceID = *device
 		p.Sensors.Temperature = jitter(*temp, 0.8)
 		p.Sensors.Humidity = clamp(jitter(*humidity, 2), 0, 100)
-		p.Sensors.SoilMoisture = clamp(jitter(*soil, 2), 0, 100)
+		p.Sensors.SoilMoisture = clamp(jitter(*soil, 2), 0, 1023)
 		p.Timestamp = time.Now().UTC().Format(time.RFC3339)
-		publishJSON(client, fmt.Sprintf("free-flame-forest/%s/telemetry/environment", *device), p, log)
+		publishJSON(client, fmt.Sprintf("%s/%s/telemetry/environment", *prefix, *device), p, log)
 	}
 	publishFire := func() {
 		mu.Lock()
@@ -167,15 +169,19 @@ func main() {
 		var p firePayload
 		p.DeviceID = *device
 		p.Sensors.FlameDetected = f
+		p.Sensors.FlameLevel = 900
+		if f {
+			p.Sensors.FlameLevel = 450
+		}
 		level := jitterInt(smokeBase, 8)
 		if f {
 			level = max(level, 700)
 		}
-		p.Sensors.SmokeLevel = clampInt(level, 0, 4095)
+		p.Sensors.SmokeLevel = clampInt(level, 0, 1023)
 		p.Actuators.Pump = on
-		p.Actuators.Buzzer = f
+		p.Actuators.Buzzer = f || p.Sensors.SmokeLevel >= 500
 		p.Timestamp = time.Now().UTC().Format(time.RFC3339)
-		publishJSON(client, fmt.Sprintf("free-flame-forest/%s/telemetry/fire", *device), p, log)
+		publishJSON(client, fmt.Sprintf("%s/%s/telemetry/fire", *prefix, *device), p, log)
 	}
 
 	publishEnv()

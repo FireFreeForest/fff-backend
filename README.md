@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Logo Fire Free Forest" width="160">
+</p>
+
 # Fire Free Forest - Backend
 
 Backend IoT untuk deteksi dini kebakaran hutan. Perangkat mengirim telemetri melalui MQTT, backend menyimpan data, mengevaluasi risiko, membuat event, mengirim notifikasi FCM, dan menyajikan REST API serta WebSocket realtime untuk dashboard.
@@ -5,7 +9,7 @@ Backend IoT untuk deteksi dini kebakaran hutan. Perangkat mengirim telemetri mel
 ## Arsitektur
 
 ```
-Device (ESP32) --MQTT--> Mosquitto --> Worker --> PostgreSQL
+Device (ESP32) atau Website Virtual Device --MQTT--> Mosquitto --> Worker --> PostgreSQL
                                           |          ^
                                           v          |
                                         Redis <----- API (REST + WebSocket)
@@ -38,7 +42,8 @@ Layanan:
 | Layanan | Port | Keterangan |
 | --- | --- | --- |
 | api | 8080 | REST API, health, metrics, WebSocket |
-| mosquitto | 1883 | MQTT broker |
+| mosquitto | 1883 | MQTT broker (TCP, device) |
+| mosquitto | 9001 | MQTT over WebSocket (website virtual device) |
 | postgres | internal | PostgreSQL 16 |
 | redis | internal | Redis 7 |
 
@@ -85,10 +90,11 @@ make build
 
 ```bash
 go run ./cmd/simulator \
-  -device DEVICE-123 \
+  -device FFF-VIRTUAL-DEVICE \
   -broker tcp://localhost:1883 \
-  -username DEVICE-123 \
+  -username FFF-VIRTUAL-DEVICE \
   -password device123 \
+  -prefix fire-free-forest \
   -env-interval 30s \
   -fire-interval 5s \
   -fire
@@ -96,8 +102,9 @@ go run ./cmd/simulator \
 
 Flag penting:
 
-- `-fire` mensimulasikan api terdeteksi (memicu event `FIRE_DETECTED` dan auto pump).
-- `-smoke`, `-temp`, `-humidity`, `-soil` mengatur nilai dasar sensor.
+- `-fire` mensimulasikan api terdeteksi (memicu event `FIRE_DETECTED`).
+- `-smoke`, `-temp`, `-humidity`, `-soil` mengatur nilai dasar sensor; smoke dan soil memakai ADC `0–1023`.
+- `-prefix` mengikuti `MQTT_TOPIC_PREFIX` (default `fire-free-forest`).
 - Simulator mendengarkan topik command dan mengirim ACK.
 
 ## Autentikasi
@@ -166,7 +173,7 @@ Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `t
 Command pompa:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/devices/DEVICE-123/commands \
+curl -X POST http://localhost:8080/api/v1/devices/FFF-VIRTUAL-DEVICE/commands \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: pump-001' \
@@ -176,50 +183,58 @@ curl -X POST http://localhost:8080/api/v1/devices/DEVICE-123/commands \
 ## WebSocket
 
 1. `POST /api/v1/realtime/ticket` dengan Bearer token.
-2. Buka `ws://localhost:8080/api/v1/ws?ticket=<ticket>&device_id=DEVICE-123` (filter opsional).
+2. Buka `ws://localhost:8080/api/v1/ws?ticket=<ticket>&device_id=FFF-VIRTUAL-DEVICE` (filter opsional).
 3. Pesan berupa JSON envelope:
 
 ```json
 {
   "type": "telemetry.fire",
-  "device_id": "DEVICE-123",
-  "data": {"telemetry": {}, "device_id": "DEVICE-123"},
-  "timestamp": "2026-01-01T10:00:00Z"
+  "device_id": "FFF-VIRTUAL-DEVICE",
+  "data": {"telemetry": {}, "device_id": "FFF-VIRTUAL-DEVICE"},
+  "ts": "2026-01-01T10:00:00Z"
 }
 ```
 
-Tipe: `connected`, `telemetry.environment`, `telemetry.fire`, `event.created`, `event.updated`, `event.resolved`, `risk.updated`, `command.updated`.
+Tipe: `connected`, `telemetry.environment`, `telemetry.fire`, `event.created`, `event.resolved`, `risk.updated`, `device.status`, `command.issued`, `command.ack`, `command.timeout`.
+
+Aplikasi Flutter memakai satu koneksi WebSocket global setelah login. Node dan detail node diperbarui langsung dari event; Analitik dan Riwayat memakai refresh debounce. Setelah reconnect, aplikasi meminta ulang tiket dan memuat ulang data untuk mengejar event yang terlewat.
 
 ## Kontrak MQTT
 
-Prefix sesuai dokumen proyek: `free-flame-forest`.
+Prefix default mengikuti website virtual device: `fire-free-forest`. Ubah lewat `MQTT_TOPIC_PREFIX` bila firmware memakai prefix lain.
 
 | Topik | Arah | QoS |
 | --- | --- | --- |
-| `free-flame-forest/{device_id}/telemetry/environment` | device -> backend | 1 |
-| `free-flame-forest/{device_id}/telemetry/fire` | device -> backend | 1 |
-| `free-flame-forest/{device_id}/event` | device -> backend | 1 |
-| `free-flame-forest/{device_id}/command` | backend -> device | 1 |
-| `free-flame-forest/{device_id}/command/ack` | device -> backend | 1 |
+| `fire-free-forest/{device_id}/telemetry/environment` | device -> backend | 1 |
+| `fire-free-forest/{device_id}/telemetry/fire` | device -> backend | 1 |
+| `fire-free-forest/{device_id}/event` | device -> backend | 1 |
+| `fire-free-forest/{device_id}/command` | backend -> device | 1 |
+| `fire-free-forest/{device_id}/command/ack` | device -> backend | 1 |
 
-Payload harus JSON valid (tanpa trailing comma).
+Payload harus JSON valid (tanpa trailing comma). Website memublikasikan QoS `0`; subscription backend QoS `1` tetap kompatibel.
 
 Telemetri lingkungan:
 
 ```json
 {
-  "device_id": "DEVICE-123",
-  "sensors": {"temperature": 31.5, "humidity": 62.0, "soil_moisture": 55.0},
+  "device_id": "FFF-VIRTUAL-DEVICE",
+  "sensors": {"temperature": 28.0, "humidity": 65.0, "soil_moisture": 640},
   "timestamp": "2026-01-01T10:00:00Z"
 }
 ```
+
+`temperature` dan `humidity` boleh dihilangkan saat sensor DHT11 error; `soil_moisture` tetap wajib dan memakai ADC mentah `0–1023`.
 
 Telemetri api/asap:
 
 ```json
 {
-  "device_id": "DEVICE-123",
-  "sensors": {"flame_detected": false, "smoke_level": 120},
+  "device_id": "FFF-VIRTUAL-DEVICE",
+  "sensors": {
+    "flame_detected": false,
+    "flame_level": 900,
+    "smoke_level": 180
+  },
   "actuators": {"pump": false, "buzzer": false},
   "timestamp": "2026-01-01T10:00:00Z"
 }
@@ -229,7 +244,7 @@ Event dari perangkat:
 
 ```json
 {
-  "device_id": "DEVICE-123",
+  "device_id": "FFF-VIRTUAL-DEVICE",
   "event_type": "SENSOR_ERROR",
   "severity": "error",
   "source": "flame_sensor",
@@ -242,7 +257,7 @@ Command dari backend:
 
 ```json
 {
-  "device_id": "DEVICE-123",
+  "device_id": "FFF-VIRTUAL-DEVICE",
   "command_id": "cmd-20260101-AB12",
   "action": "SET_PUMP",
   "payload": {"state": true, "duration": 30},
@@ -254,7 +269,7 @@ ACK perangkat:
 
 ```json
 {
-  "device_id": "DEVICE-123",
+  "device_id": "FFF-VIRTUAL-DEVICE",
   "command_id": "cmd-20260101-AB12",
   "status": "success",
   "message": "Pump activated"
@@ -268,25 +283,42 @@ Catatan: `event_id` pada payload `/event` yang tidak kosong diabaikan untuk menc
 | Kondisi | Event | Severity |
 | --- | --- | --- |
 | `flame_detected=true` | `FIRE_DETECTED` | critical |
-| `smoke_level > THRESHOLD_SMOKE_LEVEL` | `SMOKE_DETECTED` | warning |
-| `temperature > THRESHOLD_TEMPERATURE_HIGH_C` | `TEMPERATURE_HIGH` | warning |
-| `soil_moisture < THRESHOLD_SOIL_DRY_PCT` | `SOIL_DRY` | warning |
+| `smoke_level >= THRESHOLD_SMOKE_LEVEL` | `SMOKE_DETECTED` | warning |
+| `temperature >= THRESHOLD_TEMPERATURE_HIGH_C` | `TEMPERATURE_HIGH` | warning |
+| `THRESHOLD_SOIL_DRY_ADC > 0` dan `soil_moisture < THRESHOLD_SOIL_DRY_ADC` | `SOIL_DRY` | warning |
 | Perangkat tidak mengirim data > `DEVICE_OFFLINE_AFTER` | `DEVICE_OFFLINE` | warning |
 | Payload/sensor tidak valid | `SENSOR_ERROR` | error |
 
 Level risiko: `NORMAL`, `WASPADA` (1 warning), `BAHAYA` (>=2 warning), `DARURAT` (critical).
 
-Event aktif otomatis resolved bila kondisi sudah normal kembali. Cooldown mencegah duplikasi event. Saat `FIRE_DETECTED`, auto pump mengirim command `SET_PUMP` bila `AUTO_PUMP_ENABLED=true`.
+Event aktif otomatis resolved bila kondisi sudah normal kembali. Cooldown mencegah duplikasi event.
+
+Auto pump backend **nonaktif secara default** karena website/perangkat sudah memiliki logika auto pump. Bila `AUTO_PUMP_ENABLED=true`, backend mengirim `SET_PUMP` sebagai fallback saat api terdeteksi atau `smoke_level >= THRESHOLD_SMOKE_LEVEL`. `SOIL_DRY` aktif secara default (`THRESHOLD_SOIL_DRY_ADC=300`); sesuaikan nilai tersebut dengan hasil kalibrasi sensor tanah.
 
 ## Provisioning Device MQTT
 
-Device default `DEVICE-123` dibuat otomatis saat pertama kali inisialisasi volume Mosquitto. Untuk device baru:
+Device default `FFF-VIRTUAL-DEVICE` dibuat otomatis saat pertama kali inisialisasi volume Mosquitto. Untuk device baru:
 
 ```bash
 make provision DEVICE=DEVICE-456 PASSWORD=device456
 ```
 
-Script menambahkan user MQTT dan mengirim SIGHUP ke broker. ACL memakai pola username sehingga device hanya dapat menulis ke topik miliknya sendiri. Device juga otomatis terdaftar di database saat pesan pertama diterima (`AUTO_REGISTER_DEVICES=true`).
+Script menambahkan user MQTT dan mengirim SIGHUP ke broker. ACL memakai pola username sehingga device hanya dapat menulis ke topik miliknya sendiri, dan username MQTT harus sama dengan `device_id`. Device juga otomatis terdaftar di database saat pesan pertama diterima (`AUTO_REGISTER_DEVICES=true`).
+
+### Integrasi Website Virtual Device
+
+Website acuan: `https://virtual-device-six.vercel.app/`.
+
+1. Provision user yang sama dengan device ID website:
+   ```bash
+   ./scripts/provision_device.sh FFF-VIRTUAL-DEVICE device123
+   ```
+2. Di pengaturan website, isi broker `ws://localhost:9001/mqtt` untuk backend lokal (atau `ws://<host>:9001/mqtt`).
+3. Isi prefix `fire-free-forest`, device ID `FFF-VIRTUAL-DEVICE`, username `FFF-VIRTUAL-DEVICE`, dan password device.
+4. Untuk deployment publik, terminasi TLS di reverse proxy dan gunakan `wss://`.
+5. Website tetap menjadi simulator acuan; backend tidak menggantikan simulator perangkat.
+
+Catatan: port `9001` adalah MQTT-over-WebSocket untuk perangkat/website. WebSocket realtime aplikasi tetap berada di `ws://localhost:8080/api/v1/ws`.
 
 ## Environment Variables
 
@@ -295,7 +327,7 @@ Lihat `.env.example`. Variabel wajib:
 - `DB_DSN`
 - `JWT_SECRET` minimal 24 karakter
 
-Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, threshold risiko, auto pump, `FCM_CREDENTIALS_FILE`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`.
+Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `AUTO_PUMP_ENABLED`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`.
 
 Untuk mengaktifkan FCM:
 
@@ -319,8 +351,21 @@ FCM hanya dipakai untuk push notification; data utama tetap disimpan di PostgreS
 ```bash
 FCM_CREDENTIALS_FILE=/app/secrets/service-account.json
 FCM_PROJECT_ID=<project-id>
-FCM_MIN_SEVERITY=critical
+FCM_MIN_SEVERITY=error
+FCM_EVENT_TYPES=FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR
 ```
+
+`FCM_MIN_SEVERITY` menerima `error`, `warning`, atau `critical`. Urutan severity di backend: `error` < `warning` < `critical`, jadi `FCM_MIN_SEVERITY=error` tetap mengirim semua event valid. `FCM_EVENT_TYPES` adalah allowlist event yang dikirim; kosongkan/tidak set untuk memakai enam event default. Event di luar allowlist atau di bawah `FCM_MIN_SEVERITY` tidak dikirim.
+
+Kanal notifikasi Android yang dipakai worker:
+
+| Event | Channel | Sound |
+| --- | --- | --- |
+| `FIRE_DETECTED` | `fire_alerts_fire` | `notif_fire` |
+| `SMOKE_DETECTED`, `TEMPERATURE_HIGH`, `SOIL_DRY` | `fire_alerts_warning` | `notif_smoke` |
+| `SENSOR_ERROR`, `DEVICE_OFFLINE` | `fire_alerts_error` | `notif_sensor_error` |
+
+`DEVICE_OFFLINE` sengaja memakai kanal dan suara error sensor agar notifikasi perangkat offline mudah dibedakan dari peringatan biasa.
 
 6. Jalankan `podman-compose up -d worker`, lalu cek `podman-compose logs worker`. Log harus berisi `fcm notifications enabled`; jika masih `disabled`, periksa path dan isi file JSON.
 7. Dapatkan token FCM dari aplikasi client:
@@ -392,6 +437,46 @@ backend/
   deploy/mosquitto/   konfigurasi broker dan provisioning
   scripts/            provisioning device
 ```
+
+## Deployment VPS dengan Docker Compose dan Caddy
+
+Konfigurasi produksi memakai profil Compose `prod`; Caddy hanya berjalan saat profil tersebut diaktifkan.
+
+1. Arahkan DNS `api.domain.com` dan `mqtt.domain.com` ke IP VPS.
+2. Buka firewall hanya untuk SSH, HTTP, dan HTTPS:
+   ```bash
+   sudo ufw allow 22/tcp
+   sudo ufw allow 80/tcp
+   sudo ufw allow 443/tcp
+   sudo ufw enable
+   ```
+3. Salin `.env.prod.example` menjadi `.env`, lalu isi domain, email ACME, password database/MQTT/JWT/admin, dan kredensial FCM.
+4. Letakkan service account FCM di `deploy/fcm/service-account.json` dan pastikan file tidak masuk repository.
+5. Jalankan:
+   ```bash
+   docker compose --profile prod up -d --build
+   docker compose ps
+   docker compose logs -f caddy
+   ```
+6. Caddy akan menerbitkan sertifikat otomatis untuk:
+   - `https://api.domain.com` → API dan WebSocket `/api/v1/ws`
+   - `wss://mqtt.domain.com/mqtt` → Mosquitto WebSocket untuk website virtual device
+7. Di website virtual device, isi broker `wss://mqtt.domain.com/mqtt`, prefix `fire-free-forest`, device ID dan username `FFF-VIRTUAL-DEVICE`, serta password device dari `.env`.
+8. Verifikasi:
+   ```bash
+   curl https://api.domain.com/healthz
+   ```
+
+Port `8080`, `9001`, `1883`, `5432`, dan `6379` hanya di-bind ke loopback lewat variabel `API_BIND_IP`, `MQTT_BIND_IP`, dan `MQTT_WS_BIND_IP`. Jangan buka port tersebut ke publik. Jika perangkat keras memakai MQTT langsung, tambahkan listener TLS `8883` terpisah.
+
+Build aplikasi Android untuk produksi:
+
+```bash
+flutter build appbundle --release \
+  --dart-define=API_BASE_URL=https://api.domain.com
+```
+
+Gunakan `--dart-define=ALLOW_SERVER_SWITCH=true` hanya untuk build internal yang memang perlu mengganti server saat runtime.
 
 ## Keamanan Produksi
 
