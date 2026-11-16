@@ -192,6 +192,87 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("evaluation risk=%s events=%d", evaluation.RiskLevel, len(evaluation.Events))
 	}
 
+	aggregateBase := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	envRows := []*domain.TelemetryEnvironment{
+		{DeviceID: device.ID, Temperature: floatPtr(20), Humidity: floatPtr(60), SoilMoisture: 100, RecordedAt: aggregateBase, ReceivedAt: aggregateBase},
+		{DeviceID: device.ID, Temperature: floatPtr(30), Humidity: floatPtr(70), SoilMoisture: 200, RecordedAt: aggregateBase.Add(2 * time.Minute), ReceivedAt: aggregateBase},
+		{DeviceID: device.ID, Humidity: nil, SoilMoisture: 300, RecordedAt: aggregateBase.Add(5 * time.Minute), ReceivedAt: aggregateBase},
+		{DeviceID: device.ID, Temperature: floatPtr(50), Humidity: floatPtr(90), SoilMoisture: 400, RecordedAt: aggregateBase.Add(7 * time.Minute), ReceivedAt: aggregateBase},
+	}
+	for _, row := range envRows {
+		if err := repo.CreateEnvironment(context.Background(), row); err != nil {
+			t.Fatalf("create environment telemetry: %v", err)
+		}
+	}
+	fireRows := []*domain.TelemetryFire{
+		{DeviceID: device.ID, FlameDetected: true, FlameLevel: intPtr(400), SmokeLevel: 100, Pump: true, Buzzer: false, RecordedAt: aggregateBase, ReceivedAt: aggregateBase},
+		{DeviceID: device.ID, FlameDetected: false, FlameLevel: intPtr(600), SmokeLevel: 200, Pump: false, Buzzer: true, RecordedAt: aggregateBase.Add(time.Minute), ReceivedAt: aggregateBase},
+		{DeviceID: device.ID, FlameDetected: true, FlameLevel: intPtr(700), SmokeLevel: 300, Pump: true, Buzzer: false, RecordedAt: aggregateBase.Add(5 * time.Minute), ReceivedAt: aggregateBase},
+		{DeviceID: device.ID, FlameDetected: true, FlameLevel: intPtr(900), SmokeLevel: 400, Pump: true, Buzzer: false, RecordedAt: aggregateBase.Add(6 * time.Minute), ReceivedAt: aggregateBase},
+	}
+	for _, row := range fireRows {
+		if err := repo.CreateFire(context.Background(), row); err != nil {
+			t.Fatalf("create fire telemetry: %v", err)
+		}
+	}
+
+	aggregateFrom := aggregateBase.Format(time.RFC3339)
+	aggregateTo := aggregateBase.Add(10 * time.Minute).Format(time.RFC3339)
+	var envAggregate struct {
+		Data struct {
+			DeviceID        string    `json:"device_id"`
+			From            time.Time `json:"from"`
+			To              time.Time `json:"to"`
+			IntervalMinutes int       `json:"interval_minutes"`
+			BucketTimezone  string    `json:"bucket_timezone"`
+			Points          []struct {
+				BucketStart  time.Time `json:"bucket_start"`
+				Temperature  *float64  `json:"temperature"`
+				Humidity     *float64  `json:"humidity"`
+				SoilMoisture float64   `json:"soil_moisture"`
+				SampleCount  int64     `json:"sample_count"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/environment/aggregate?from="+aggregateFrom+"&to="+aggregateTo+"&interval=5", token, nil, &envAggregate)
+	if status != http.StatusOK || envAggregate.Data.BucketTimezone != "Asia/Jakarta" || len(envAggregate.Data.Points) != 2 {
+		t.Fatalf("environment aggregate status=%d tz=%q points=%d", status, envAggregate.Data.BucketTimezone, len(envAggregate.Data.Points))
+	}
+	firstEnv := envAggregate.Data.Points[0]
+	if !firstEnv.BucketStart.Equal(aggregateBase) || firstEnv.Temperature == nil || *firstEnv.Temperature != 25 || firstEnv.Humidity == nil || *firstEnv.Humidity != 65 || firstEnv.SoilMoisture != 150 || firstEnv.SampleCount != 2 {
+		t.Fatalf("environment bucket 1 = %+v", firstEnv)
+	}
+	secondEnv := envAggregate.Data.Points[1]
+	if !secondEnv.BucketStart.Equal(aggregateBase.Add(5*time.Minute)) || secondEnv.Temperature == nil || *secondEnv.Temperature != 50 || secondEnv.Humidity == nil || *secondEnv.Humidity != 90 || secondEnv.SoilMoisture != 350 || secondEnv.SampleCount != 2 {
+		t.Fatalf("environment bucket 2 = %+v", secondEnv)
+	}
+
+	var fireAggregate struct {
+		Data struct {
+			Points []struct {
+				BucketStart        time.Time `json:"bucket_start"`
+				FlameLevel         *float64  `json:"flame_level"`
+				SmokeLevel         float64   `json:"smoke_level"`
+				FlameDetectedRatio float64   `json:"flame_detected_ratio"`
+				PumpOnRatio        float64   `json:"pump_on_ratio"`
+				BuzzerOnRatio      float64   `json:"buzzer_on_ratio"`
+				SampleCount        int64     `json:"sample_count"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/fire/aggregate?from="+aggregateFrom+"&to="+aggregateTo+"&interval=5", token, nil, &fireAggregate)
+	if status != http.StatusOK || len(fireAggregate.Data.Points) != 2 {
+		t.Fatalf("fire aggregate status=%d points=%d", status, len(fireAggregate.Data.Points))
+	}
+	firstFire := fireAggregate.Data.Points[0]
+	if !firstFire.BucketStart.Equal(aggregateBase) || firstFire.FlameLevel == nil || *firstFire.FlameLevel != 500 || firstFire.SmokeLevel != 150 || firstFire.FlameDetectedRatio != 0.5 || firstFire.PumpOnRatio != 0.5 || firstFire.BuzzerOnRatio != 0.5 || firstFire.SampleCount != 2 {
+		t.Fatalf("fire bucket 1 = %+v", firstFire)
+	}
+	secondFire := fireAggregate.Data.Points[1]
+	if !secondFire.BucketStart.Equal(aggregateBase.Add(5*time.Minute)) || secondFire.FlameLevel == nil || *secondFire.FlameLevel != 800 || secondFire.SmokeLevel != 350 || secondFire.FlameDetectedRatio != 1 || secondFire.PumpOnRatio != 1 || secondFire.BuzzerOnRatio != 0 || secondFire.SampleCount != 2 {
+		t.Fatalf("fire bucket 2 = %+v", secondFire)
+	}
+
 	ackedCmd, changed, err := repo.AckCommand(context.Background(), device.ID, issued.Data.CommandID, domain.CommandSuccess, "Pump activated")
 	if err != nil || !changed || ackedCmd.Status != domain.CommandSuccess {
 		t.Fatalf("ack command changed=%v status=%v err=%v", changed, ackedCmd, err)
@@ -275,7 +356,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 		} `json:"data"`
 	}
 	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/dashboard/summary", token, nil, &dashboard)
-	if status != http.StatusOK || dashboard.Data.Devices.Total != 1 || dashboard.Data.ActiveEvents.Total != 0 {
+	if status != http.StatusOK || dashboard.Data.Devices.Total != 2 || dashboard.Data.ActiveEvents.Total != 0 {
 		t.Fatalf("dashboard status=%d devices=%d active=%d", status, dashboard.Data.Devices.Total, dashboard.Data.ActiveEvents.Total)
 	}
 
@@ -305,6 +386,10 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("ws welcome type=%q", welcome.Type)
 	}
 }
+
+func floatPtr(v float64) *float64 { return &v }
+
+func intPtr(v int) *int { return &v }
 
 func doJSON(t *testing.T, method, url, token string, body, out any) int {
 	t.Helper()

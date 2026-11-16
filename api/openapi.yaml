@@ -430,6 +430,41 @@ paths:
                         items: { $ref: "#/components/schemas/EnvironmentTelemetry" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /devices/{deviceID}/telemetry/environment/aggregate:
+    parameters:
+      - $ref: "#/components/parameters/DeviceID"
+    get:
+      tags: [Telemetry]
+      summary: Rata-rata telemetri lingkungan per interval
+      description: |
+        Mengelompokkan telemetri lingkungan ke bucket interval menit dan
+        mengembalikan rata-rata temperature, humidity, serta soil moisture.
+        Bucket disejajarkan ke WIB (Asia/Jakarta), tetapi timestamp response
+        dalam UTC. Bucket tanpa data tidak dikembalikan.
+      parameters:
+        - $ref: "#/components/parameters/FromRequired"
+        - $ref: "#/components/parameters/ToRequired"
+        - $ref: "#/components/parameters/Interval"
+      responses:
+        "200":
+          description: Agregat telemetri lingkungan
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/EnvironmentAggregate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Validasi gagal (rentang waktu atau interval)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /devices/{deviceID}/telemetry/fire:
     parameters:
       - $ref: "#/components/parameters/DeviceID"
@@ -455,6 +490,42 @@ paths:
                         type: array
                         items: { $ref: "#/components/schemas/FireTelemetry" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /devices/{deviceID}/telemetry/fire/aggregate:
+    parameters:
+      - $ref: "#/components/parameters/DeviceID"
+    get:
+      tags: [Telemetry]
+      summary: Rata-rata telemetri api/asap per interval
+      description: |
+        Mengelompokkan telemetri api/asap ke bucket interval menit dan
+        mengembalikan rata-rata flame/smoke level, rasio flame terdeteksi,
+        serta rasio pompa dan buzzer aktif. Bucket disejajarkan ke WIB
+        (Asia/Jakarta), tetapi timestamp response dalam UTC. Bucket tanpa
+        data tidak dikembalikan.
+      parameters:
+        - $ref: "#/components/parameters/FromRequired"
+        - $ref: "#/components/parameters/ToRequired"
+        - $ref: "#/components/parameters/Interval"
+      responses:
+        "200":
+          description: Agregat telemetri api/asap
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/DataEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/FireAggregate" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: Validasi gagal (rentang waktu atau interval)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /devices/{deviceID}/commands:
     parameters:
@@ -827,6 +898,21 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    FromRequired:
+      name: from
+      in: query
+      required: true
+      schema: { type: string, format: date-time }
+    ToRequired:
+      name: to
+      in: query
+      required: true
+      schema: { type: string, format: date-time }
+    Interval:
+      name: interval
+      in: query
+      description: Lebar bucket dalam menit.
+      schema: { type: integer, minimum: 1, maximum: 1440, default: 5 }
     Page:
       name: page
       in: query
@@ -992,6 +1078,79 @@ components:
         buzzer: { type: boolean }
         recorded_at: { type: string, format: date-time }
         received_at: { type: string, format: date-time }
+
+    EnvironmentAggregate:
+      type: object
+      properties:
+        device_id: { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        interval_minutes: { type: integer, minimum: 1, maximum: 1440 }
+        bucket_timezone: { type: string, example: Asia/Jakarta }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/EnvironmentAggregatePoint" }
+
+    EnvironmentAggregatePoint:
+      type: object
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+          description: "Awal bucket dalam UTC; bucket disejajarkan ke WIB."
+        temperature:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 60
+          description: "Rata-rata temperature; null bila semua sampel null."
+        humidity:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: "Rata-rata humidity; null bila semua sampel null."
+        soil_moisture:
+          type: number
+          minimum: 0
+          maximum: 1023
+          description: "Rata-rata ADC mentah sensor tanah."
+        sample_count: { type: integer, format: int64 }
+
+    FireAggregate:
+      type: object
+      properties:
+        device_id: { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        interval_minutes: { type: integer, minimum: 1, maximum: 1440 }
+        bucket_timezone: { type: string, example: Asia/Jakarta }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/FireAggregatePoint" }
+
+    FireAggregatePoint:
+      type: object
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+          description: "Awal bucket dalam UTC; bucket disejajarkan ke WIB."
+        flame_level:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 1023
+          description: "Rata-rata ADC mentah sensor api."
+        smoke_level:
+          type: number
+          minimum: 0
+          maximum: 1023
+          description: "Rata-rata ADC mentah sensor MQ-2."
+        flame_detected_ratio: { type: number, minimum: 0, maximum: 1 }
+        pump_on_ratio: { type: number, minimum: 0, maximum: 1 }
+        buzzer_on_ratio: { type: number, minimum: 0, maximum: 1 }
+        sample_count: { type: integer, format: int64 }
 
     Event:
       type: object

@@ -173,6 +173,24 @@ type TelemetryFire struct {
 
 func (TelemetryFire) TableName() string { return "telemetry_fire" }
 
+type TelemetryEnvironmentBucket struct {
+	BucketStart  time.Time `json:"bucket_start"`
+	Temperature  *float64  `json:"temperature"`
+	Humidity     *float64  `json:"humidity"`
+	SoilMoisture float64   `json:"soil_moisture"`
+	SampleCount  int64     `json:"sample_count"`
+}
+
+type TelemetryFireBucket struct {
+	BucketStart        time.Time `json:"bucket_start"`
+	FlameLevel         *float64  `json:"flame_level"`
+	SmokeLevel         float64   `json:"smoke_level"`
+	FlameDetectedRatio float64   `json:"flame_detected_ratio"`
+	PumpOnRatio        float64   `json:"pump_on_ratio"`
+	BuzzerOnRatio      float64   `json:"buzzer_on_ratio"`
+	SampleCount        int64     `json:"sample_count"`
+}
+
 type Event struct {
 	ID               uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
 	DeviceID         uuid.UUID       `gorm:"type:uuid;not null" json:"device_id"`

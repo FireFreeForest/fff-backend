@@ -278,6 +278,66 @@ func (r *Repository) ListFire(ctx context.Context, deviceID uuid.UUID, from, to 
 	return rows, total, err
 }
 
+func (r *Repository) AggregateEnvironment(ctx context.Context, deviceID uuid.UUID, from, to time.Time, intervalMinutes int) ([]domain.TelemetryEnvironmentBucket, error) {
+	rows := make([]domain.TelemetryEnvironmentBucket, 0)
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT
+			date_bin(
+				make_interval(mins => ?),
+				recorded_at,
+				'2000-01-01T00:00:00+07:00'::timestamptz
+			) AS bucket_start,
+			AVG(temperature)::float8 AS temperature,
+			AVG(humidity)::float8 AS humidity,
+			AVG(soil_moisture)::float8 AS soil_moisture,
+			COUNT(*) AS sample_count
+		FROM telemetry_environment
+		WHERE device_id = ?
+			AND recorded_at >= ?
+			AND recorded_at < ?
+		GROUP BY bucket_start
+		ORDER BY bucket_start ASC
+	`, intervalMinutes, deviceID, from, to).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].BucketStart = rows[i].BucketStart.UTC()
+	}
+	return rows, nil
+}
+
+func (r *Repository) AggregateFire(ctx context.Context, deviceID uuid.UUID, from, to time.Time, intervalMinutes int) ([]domain.TelemetryFireBucket, error) {
+	rows := make([]domain.TelemetryFireBucket, 0)
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT
+			date_bin(
+				make_interval(mins => ?),
+				recorded_at,
+				'2000-01-01T00:00:00+07:00'::timestamptz
+			) AS bucket_start,
+			AVG(flame_level)::float8 AS flame_level,
+			AVG(smoke_level)::float8 AS smoke_level,
+			AVG(CASE WHEN flame_detected THEN 1 ELSE 0 END)::float8 AS flame_detected_ratio,
+			AVG(CASE WHEN pump THEN 1 ELSE 0 END)::float8 AS pump_on_ratio,
+			AVG(CASE WHEN buzzer THEN 1 ELSE 0 END)::float8 AS buzzer_on_ratio,
+			COUNT(*) AS sample_count
+		FROM telemetry_fire
+		WHERE device_id = ?
+			AND recorded_at >= ?
+			AND recorded_at < ?
+		GROUP BY bucket_start
+		ORDER BY bucket_start ASC
+	`, intervalMinutes, deviceID, from, to).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].BucketStart = rows[i].BucketStart.UTC()
+	}
+	return rows, nil
+}
+
 func (r *Repository) LatestEnvironment(ctx context.Context, deviceID uuid.UUID) (*domain.TelemetryEnvironment, error) {
 	var row domain.TelemetryEnvironment
 	if err := r.db.WithContext(ctx).Where("device_id = ?", deviceID).
