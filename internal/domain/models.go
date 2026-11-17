@@ -143,8 +143,31 @@ type Device struct {
 	Status          DeviceStatus `gorm:"type:text;not null" json:"status"`
 	FirmwareVersion string       `json:"firmware_version"`
 	LastSeenAt      *time.Time   `json:"last_seen_at,omitempty"`
+	OnlineSince     *time.Time   `json:"online_since,omitempty"`
 	CreatedAt       time.Time    `json:"created_at"`
 	UpdatedAt       time.Time    `json:"updated_at"`
+}
+
+func (d Device) UptimeSeconds(now time.Time) int64 {
+	if d.Status != DeviceOnline || d.OnlineSince == nil {
+		return 0
+	}
+	seconds := int64(now.Sub(*d.OnlineSince).Seconds())
+	if seconds < 0 {
+		return 0
+	}
+	return seconds
+}
+
+func (d Device) MarshalJSON() ([]byte, error) {
+	type alias Device
+	return json.Marshal(struct {
+		alias
+		UptimeSeconds int64 `json:"uptime_seconds"`
+	}{
+		alias:         alias(d),
+		UptimeSeconds: d.UptimeSeconds(time.Now().UTC()),
+	})
 }
 
 type TelemetryEnvironment struct {

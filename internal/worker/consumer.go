@@ -381,13 +381,14 @@ func (w *Worker) resolveDevice(ctx context.Context, deviceID string) (*domain.De
 		}
 		now := time.Now().UTC()
 		candidate := &domain.Device{
-			ID:         uuid.New(),
-			DeviceID:   deviceID,
-			Name:       deviceID,
-			Status:     domain.DeviceOnline,
-			LastSeenAt: &now,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			ID:          uuid.New(),
+			DeviceID:    deviceID,
+			Name:        deviceID,
+			Status:      domain.DeviceOnline,
+			LastSeenAt:  &now,
+			OnlineSince: &now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
 		created, ensured, err := w.repo.EnsureDevice(ctx, candidate)
 		if err != nil {
@@ -398,7 +399,12 @@ func (w *Worker) resolveDevice(ctx context.Context, deviceID string) (*domain.De
 			_ = realtime.Publish(ctx, w.rdb, realtime.Envelope{
 				Type:     "device.status",
 				DeviceID: deviceID,
-				Data:     map[string]any{"status": string(domain.DeviceOnline), "online": true},
+				Data: map[string]any{
+					"status":         string(domain.DeviceOnline),
+					"online":         true,
+					"online_since":   now,
+					"uptime_seconds": int64(0),
+				},
 			})
 			return ensured, nil
 		}
@@ -407,17 +413,28 @@ func (w *Worker) resolveDevice(ctx context.Context, deviceID string) (*domain.De
 
 	wasOnline := device.Status == domain.DeviceOnline
 	now := time.Now().UTC()
+	onlineSince := now
+	if wasOnline && device.OnlineSince != nil {
+		onlineSince = *device.OnlineSince
+	}
 	if err := w.repo.TouchDevice(ctx, deviceID, now); err != nil {
 		return nil, err
 	}
 	device.Status = domain.DeviceOnline
 	device.LastSeenAt = &now
+	device.OnlineSince = &onlineSince
 	if !wasOnline {
 		w.risk.ResolveDeviceEvent(ctx, device, domain.EventDeviceOffline)
 		_ = realtime.Publish(ctx, w.rdb, realtime.Envelope{
 			Type:     "device.status",
 			DeviceID: deviceID,
-			Data:     map[string]any{"status": string(domain.DeviceOnline), "online": true, "last_seen_at": now},
+			Data: map[string]any{
+				"status":         string(domain.DeviceOnline),
+				"online":         true,
+				"last_seen_at":   now,
+				"online_since":   now,
+				"uptime_seconds": int64(0),
+			},
 		})
 	}
 	return device, nil

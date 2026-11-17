@@ -60,7 +60,12 @@ func (w *Worker) sweepOfflineDevices(ctx context.Context) {
 		_ = realtime.Publish(ctx, w.rdb, realtime.Envelope{
 			Type:     "device.status",
 			DeviceID: deviceID,
-			Data:     map[string]any{"status": string(domain.DeviceOffline), "online": false},
+			Data: map[string]any{
+				"status":         string(domain.DeviceOffline),
+				"online":         false,
+				"online_since":   nil,
+				"uptime_seconds": int64(0),
+			},
 		})
 
 		device, err := w.repo.GetDeviceByDeviceID(ctx, deviceID)

@@ -200,6 +200,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Response lingkungan berisi `temperature`, `humidity`, `soil_moisture`, dan `sample_count`. Response api/asap berisi `flame_level`, `smoke_level`, `flame_detected_ratio`, `pump_on_ratio`, `buzzer_on_ratio`, dan `sample_count`. Ratio bernilai `0..1`. `soil_moisture` dan `smoke_level` tetap rata-rata ADC mentah `0–1023`, bukan persen. Response raw menambahkan `mode`, `decimated`, `source_points`, dan `returned_points`; setiap titik raw memakai field telemetri asli seperti `recorded_at`, `received_at`, dan `id`.
 
+### Uptime device
+
+Device memiliki `online_since` (waktu mulai online) dan `uptime_seconds` (durasi sejak `online_since`). Saat device terdeteksi offline oleh sweeper (`DEVICE_OFFLINE_AFTER`, default 30 detik), `online_since` dikosongkan dan `uptime_seconds` menjadi `0`. Saat device mengirim data lagi setelah offline, `online_since` diisi waktu reconnect sehingga uptime mereset. Reconnect dalam batas offline tidak mereset uptime. Field ini tersedia di list/detail/status device dan event WebSocket `device.status`.
+
 `GET /geocode/reverse` memakai Nominatim/OpenStreetMap, menyimpan hasil di Redis (`GEOCODE_CACHE_TTL`, default `720h`), dan membatasi request ke Nominatim maksimal 1 request/detik. Set `GEOCODE_USER_AGENT` ke identitas aplikasi yang valid untuk penggunaan produksi.
 
 Command pompa:

@@ -222,13 +222,15 @@ func (h *Handler) deviceStatus(c *gin.Context) {
 	}
 	env, fire, risk := h.cachedLatest(c, device)
 	respondData(c, http.StatusOK, gin.H{
-		"device":       device,
-		"status":       device.Status,
-		"last_seen_at": device.LastSeenAt,
-		"environment":  env,
-		"fire":         fire,
-		"risk_level":   risk,
-		"server_time":  time.Now().UTC(),
+		"device":         device,
+		"status":         device.Status,
+		"last_seen_at":   device.LastSeenAt,
+		"online_since":   device.OnlineSince,
+		"uptime_seconds": device.UptimeSeconds(time.Now().UTC()),
+		"environment":    env,
+		"fire":           fire,
+		"risk_level":     risk,
+		"server_time":    time.Now().UTC(),
 	})
 }
 

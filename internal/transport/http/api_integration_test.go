@@ -152,12 +152,26 @@ func TestAPIFlowIntegration(t *testing.T) {
 
 	var deviceStatus struct {
 		Data struct {
-			RiskLevel string `json:"risk_level"`
+			RiskLevel     string     `json:"risk_level"`
+			Status        string     `json:"status"`
+			OnlineSince   *time.Time `json:"online_since"`
+			UptimeSeconds int64      `json:"uptime_seconds"`
+			Device        struct {
+				Status        string     `json:"status"`
+				OnlineSince   *time.Time `json:"online_since"`
+				UptimeSeconds int64      `json:"uptime_seconds"`
+			} `json:"device"`
 		} `json:"data"`
 	}
 	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/status", token, nil, &deviceStatus)
 	if status != http.StatusOK || deviceStatus.Data.RiskLevel != "UNKNOWN" {
 		t.Fatalf("device status=%d risk=%q", status, deviceStatus.Data.RiskLevel)
+	}
+	if deviceStatus.Data.Status != "offline" || deviceStatus.Data.UptimeSeconds != 0 || deviceStatus.Data.OnlineSince != nil {
+		t.Fatalf("initial uptime status=%q uptime=%d online_since=%v", deviceStatus.Data.Status, deviceStatus.Data.UptimeSeconds, deviceStatus.Data.OnlineSince)
+	}
+	if deviceStatus.Data.Device.Status != "offline" || deviceStatus.Data.Device.UptimeSeconds != 0 || deviceStatus.Data.Device.OnlineSince != nil {
+		t.Fatalf("initial nested device uptime status=%q uptime=%d online_since=%v", deviceStatus.Data.Device.Status, deviceStatus.Data.Device.UptimeSeconds, deviceStatus.Data.Device.OnlineSince)
 	}
 
 	var issued struct {
@@ -271,6 +285,70 @@ func TestAPIFlowIntegration(t *testing.T) {
 	secondFire := fireAggregate.Data.Points[1]
 	if !secondFire.BucketStart.Equal(aggregateBase.Add(5*time.Minute)) || secondFire.FlameLevel == nil || *secondFire.FlameLevel != 800 || secondFire.SmokeLevel != 350 || secondFire.FlameDetectedRatio != 1 || secondFire.PumpOnRatio != 1 || secondFire.BuzzerOnRatio != 0 || secondFire.SampleCount != 2 {
 		t.Fatalf("fire bucket 2 = %+v", secondFire)
+	}
+
+	var envRaw struct {
+		Data struct {
+			Mode            string `json:"mode"`
+			Decimated       bool   `json:"decimated"`
+			SourcePoints    int    `json:"source_points"`
+			ReturnedPoints  int    `json:"returned_points"`
+			IntervalMinutes int    `json:"interval_minutes"`
+			Points          []struct {
+				Temperature  *float64  `json:"temperature"`
+				Humidity     *float64  `json:"humidity"`
+				SoilMoisture float64   `json:"soil_moisture"`
+				RecordedAt   time.Time `json:"recorded_at"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/environment/aggregate?from="+aggregateFrom+"&to="+aggregateTo+"&interval=0", token, nil, &envRaw)
+	if status != http.StatusOK || envRaw.Data.Mode != "raw" || envRaw.Data.Decimated || envRaw.Data.SourcePoints != 4 || envRaw.Data.ReturnedPoints != 4 || envRaw.Data.IntervalMinutes != 0 || len(envRaw.Data.Points) != 4 {
+		t.Fatalf("environment raw status=%d body=%+v", status, envRaw.Data)
+	}
+	if envRaw.Data.Points[0].Temperature == nil || *envRaw.Data.Points[0].Temperature != 20 || envRaw.Data.Points[3].Temperature == nil || *envRaw.Data.Points[3].Temperature != 50 {
+		t.Fatalf("environment raw points=%+v", envRaw.Data.Points)
+	}
+
+	var fireRaw struct {
+		Data struct {
+			Mode           string `json:"mode"`
+			Decimated      bool   `json:"decimated"`
+			SourcePoints   int    `json:"source_points"`
+			ReturnedPoints int    `json:"returned_points"`
+			Points         []struct {
+				FlameDetected bool      `json:"flame_detected"`
+				SmokeLevel    int       `json:"smoke_level"`
+				RecordedAt    time.Time `json:"recorded_at"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/fire/aggregate?from="+aggregateFrom+"&to="+aggregateTo+"&interval=0", token, nil, &fireRaw)
+	if status != http.StatusOK || fireRaw.Data.Mode != "raw" || fireRaw.Data.Decimated || fireRaw.Data.SourcePoints != 4 || fireRaw.Data.ReturnedPoints != 4 || len(fireRaw.Data.Points) != 4 {
+		t.Fatalf("fire raw status=%d body=%+v", status, fireRaw.Data)
+	}
+	if !fireRaw.Data.Points[0].FlameDetected || fireRaw.Data.Points[0].SmokeLevel != 100 || fireRaw.Data.Points[3].SmokeLevel != 400 {
+		t.Fatalf("fire raw points=%+v", fireRaw.Data.Points)
+	}
+
+	nowTouch := time.Now().UTC()
+	if err := repo.TouchDevice(context.Background(), "TEST-001", nowTouch); err != nil {
+		t.Fatalf("touch device: %v", err)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/status", token, nil, &deviceStatus)
+	if status != http.StatusOK || deviceStatus.Data.Status != "online" || deviceStatus.Data.OnlineSince == nil || deviceStatus.Data.UptimeSeconds < 0 {
+		t.Fatalf("online uptime status=%q uptime=%d online_since=%v", deviceStatus.Data.Status, deviceStatus.Data.UptimeSeconds, deviceStatus.Data.OnlineSince)
+	}
+	if deviceStatus.Data.Device.OnlineSince == nil || deviceStatus.Data.Device.UptimeSeconds < 0 {
+		t.Fatalf("nested online uptime=%d online_since=%v", deviceStatus.Data.Device.UptimeSeconds, deviceStatus.Data.Device.OnlineSince)
+	}
+
+	if _, err := repo.MarkStaleDevicesOffline(context.Background(), time.Now().UTC().Add(time.Minute)); err != nil {
+		t.Fatalf("mark stale devices offline: %v", err)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/status", token, nil, &deviceStatus)
+	if status != http.StatusOK || deviceStatus.Data.Status != "offline" || deviceStatus.Data.UptimeSeconds != 0 || deviceStatus.Data.OnlineSince != nil {
+		t.Fatalf("reset uptime status=%q uptime=%d online_since=%v", deviceStatus.Data.Status, deviceStatus.Data.UptimeSeconds, deviceStatus.Data.OnlineSince)
 	}
 
 	ackedCmd, changed, err := repo.AckCommand(context.Background(), device.ID, issued.Data.CommandID, domain.CommandSuccess, "Pump activated")

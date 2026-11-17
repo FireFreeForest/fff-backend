@@ -1033,6 +1033,15 @@ components:
         status: { type: string, enum: [online, offline] }
         firmware_version: { type: string }
         last_seen_at: { type: string, format: date-time, nullable: true }
+        online_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Waktu device mulai online; null saat offline."
+        uptime_seconds:
+          type: integer
+          format: int64
+          description: "Durasi sejak online_since; 0 saat offline."
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -1245,6 +1254,8 @@ components:
         device: { $ref: "#/components/schemas/Device" }
         status: { type: string }
         last_seen_at: { type: string, format: date-time, nullable: true }
+        online_since: { type: string, format: date-time, nullable: true }
+        uptime_seconds: { type: integer, format: int64 }
         environment: { type: object, allOf: [{ $ref: "#/components/schemas/EnvironmentTelemetry" }], nullable: true }
         fire: { type: object, allOf: [{ $ref: "#/components/schemas/FireTelemetry" }], nullable: true }
         risk_level: { type: string, enum: [NORMAL, WASPADA, BAHAYA, DARURAT, UNKNOWN] }

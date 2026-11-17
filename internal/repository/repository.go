@@ -191,6 +191,7 @@ func (r *Repository) TouchDevice(ctx context.Context, deviceID string, now time.
 		Updates(map[string]any{
 			"status":       string(domain.DeviceOnline),
 			"last_seen_at": now,
+			"online_since": gorm.Expr("CASE WHEN status = ? THEN COALESCE(online_since, ?) ELSE ? END", string(domain.DeviceOnline), now, now),
 			"updated_at":   now,
 		}).Error
 }
@@ -222,7 +223,7 @@ func (r *Repository) MarkStaleDevicesOffline(ctx context.Context, cutoff time.Ti
 	var rows []DeviceIDRow
 	err := r.db.WithContext(ctx).Raw(`
 		UPDATE devices
-		SET status = 'offline', updated_at = now()
+		SET status = 'offline', online_since = NULL, updated_at = now()
 		WHERE status = 'online' AND (last_seen_at IS NULL OR last_seen_at < ?)
 		RETURNING device_id`, cutoff).Scan(&rows).Error
 	if err != nil {
