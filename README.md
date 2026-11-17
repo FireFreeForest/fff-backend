@@ -163,9 +163,9 @@ Semua endpoint di bawah prefix `/api/v1`.
 | GET | `/devices/:deviceID/status` | semua | Status + telemetri terbaru |
 | GET | `/devices/:deviceID/telemetry/latest` | semua | Telemetri terbaru |
 | GET | `/devices/:deviceID/telemetry/environment` | semua | Riwayat lingkungan |
-| GET | `/devices/:deviceID/telemetry/environment/aggregate` | semua | Rata-rata lingkungan per interval |
+| GET | `/devices/:deviceID/telemetry/environment/aggregate` | semua | Rata-rata atau raw lingkungan per interval |
 | GET | `/devices/:deviceID/telemetry/fire` | semua | Riwayat api/asap |
-| GET | `/devices/:deviceID/telemetry/fire/aggregate` | semua | Rata-rata api/asap per interval |
+| GET | `/devices/:deviceID/telemetry/fire/aggregate` | semua | Rata-rata atau raw api/asap per interval |
 | GET | `/devices/:deviceID/commands` | semua | Riwayat command |
 | POST | `/devices/:deviceID/commands` | admin, petugas | Kirim command pompa |
 | GET | `/commands/:commandID` | semua | Detail command |
@@ -184,19 +184,21 @@ Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `t
 
 Saat `device_id` tidak dikirim pada `POST /devices`, backend membuat ID `FFF-XXXXXXXX` (8 karakter acak) dan mengembalikannya di field `device_id`. Mobile memakai ID dari respons tersebut untuk provisioning SoftAP. ID manual tetap diterima selama cocok dengan pola `A-Za-z0-9._-` sepanjang 3–64 karakter.
 
-### Agregat telemetri
+### Agregat dan raw telemetri
 
 Endpoint agregat mengelompokkan data ke bucket interval menit dan menghitung rata-rata. Parameter `from` dan `to` wajib RFC3339, `interval` dalam menit (default `5`, maksimal `1440`). Rentang maksimal 90 hari dan maksimal 5000 bucket; bucket tanpa data tidak dikembalikan. Bucket disejajarkan ke WIB (`Asia/Jakarta`), tetapi `bucket_start`, `from`, dan `to` dikirim dalam UTC.
+
+`interval=0` mengaktifkan mode raw tanpa rata-rata. Rentang raw maksimal 7 hari. Jika sumber data ≤5000 baris, semua baris dikembalikan dengan `mode: "raw"`. Jika lebih dari 5000, backend melakukan decimation yang mempertahankan nilai ekstrem (bukan rata-rata) dan mengembalikan maksimal 5000 titik dengan `mode: "raw_decimated"`. Decimation api/asap memprioritaskan baris `flame_detected=true`; decimation lingkungan mempertahankan min/max temperature, humidity, dan soil moisture. Batas keras sumber raw adalah 250.000 baris; di atas itu response `422 raw_source_too_large`.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8080/api/v1/devices/FFF-VIRTUAL-DEVICE/telemetry/environment/aggregate?from=2026-01-01T00:00:00Z&to=2026-01-01T06:00:00Z&interval=5"
 
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/api/v1/devices/FFF-VIRTUAL-DEVICE/telemetry/fire/aggregate?from=2026-01-01T00:00:00Z&to=2026-01-01T06:00:00Z&interval=5"
+  "http://localhost:8080/api/v1/devices/FFF-VIRTUAL-DEVICE/telemetry/fire/aggregate?from=2026-01-01T00:00:00Z&to=2026-01-01T06:00:00Z&interval=0"
 ```
 
-Response lingkungan berisi `temperature`, `humidity`, `soil_moisture`, dan `sample_count`. Response api/asap berisi `flame_level`, `smoke_level`, `flame_detected_ratio`, `pump_on_ratio`, `buzzer_on_ratio`, dan `sample_count`. Ratio bernilai `0..1`. `soil_moisture` dan `smoke_level` tetap rata-rata ADC mentah `0–1023`, bukan persen.
+Response lingkungan berisi `temperature`, `humidity`, `soil_moisture`, dan `sample_count`. Response api/asap berisi `flame_level`, `smoke_level`, `flame_detected_ratio`, `pump_on_ratio`, `buzzer_on_ratio`, dan `sample_count`. Ratio bernilai `0..1`. `soil_moisture` dan `smoke_level` tetap rata-rata ADC mentah `0–1023`, bukan persen. Response raw menambahkan `mode`, `decimated`, `source_points`, dan `returned_points`; setiap titik raw memakai field telemetri asli seperti `recorded_at`, `received_at`, dan `id`.
 
 `GET /geocode/reverse` memakai Nominatim/OpenStreetMap, menyimpan hasil di Redis (`GEOCODE_CACHE_TTL`, default `720h`), dan membatasi request ke Nominatim maksimal 1 request/detik. Set `GEOCODE_USER_AGENT` ke identitas aplikasi yang valid untuk penggunaan produksi.
 

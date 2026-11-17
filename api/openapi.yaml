@@ -435,12 +435,14 @@ paths:
       - $ref: "#/components/parameters/DeviceID"
     get:
       tags: [Telemetry]
-      summary: Rata-rata telemetri lingkungan per interval
+      summary: Rata-rata atau data mentah telemetri lingkungan
       description: |
         Mengelompokkan telemetri lingkungan ke bucket interval menit dan
         mengembalikan rata-rata temperature, humidity, serta soil moisture.
         Bucket disejajarkan ke WIB (Asia/Jakarta), tetapi timestamp response
         dalam UTC. Bucket tanpa data tidak dikembalikan.
+        Gunakan `interval=0` untuk mode raw tanpa rata-rata; rentang raw
+        maksimal 7 hari dan output maksimal 5000 titik (decimation bila perlu).
       parameters:
         - $ref: "#/components/parameters/FromRequired"
         - $ref: "#/components/parameters/ToRequired"
@@ -496,13 +498,15 @@ paths:
       - $ref: "#/components/parameters/DeviceID"
     get:
       tags: [Telemetry]
-      summary: Rata-rata telemetri api/asap per interval
+      summary: Rata-rata atau data mentah telemetri api/asap
       description: |
         Mengelompokkan telemetri api/asap ke bucket interval menit dan
         mengembalikan rata-rata flame/smoke level, rasio flame terdeteksi,
         serta rasio pompa dan buzzer aktif. Bucket disejajarkan ke WIB
         (Asia/Jakarta), tetapi timestamp response dalam UTC. Bucket tanpa
         data tidak dikembalikan.
+        Gunakan `interval=0` untuk mode raw tanpa rata-rata; rentang raw
+        maksimal 7 hari dan output maksimal 5000 titik (decimation bila perlu).
       parameters:
         - $ref: "#/components/parameters/FromRequired"
         - $ref: "#/components/parameters/ToRequired"
@@ -911,8 +915,8 @@ components:
     Interval:
       name: interval
       in: query
-      description: Lebar bucket dalam menit.
-      schema: { type: integer, minimum: 1, maximum: 1440, default: 5 }
+      description: "Lebar bucket dalam menit. Nilai 0 mengaktifkan mode raw tanpa rata-rata."
+      schema: { type: integer, minimum: 0, maximum: 1440, default: 5 }
     Page:
       name: page
       in: query
@@ -1085,11 +1089,27 @@ components:
         device_id: { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
-        interval_minutes: { type: integer, minimum: 1, maximum: 1440 }
+        interval_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          description: "0 untuk mode raw."
         bucket_timezone: { type: string, example: Asia/Jakarta }
+        mode:
+          type: string
+          enum: [raw, raw_decimated]
+          description: "Hadir saat interval=0; raw_decimated bila output diringkas menjadi maksimal 5000 titik."
+        decimated:
+          type: boolean
+          description: "true bila data raw diringkas menjadi maksimal 5000 titik."
+        source_points: { type: integer, description: "Jumlah baris sumber sebelum decimation." }
+        returned_points: { type: integer, description: "Jumlah titik yang dikembalikan." }
         points:
           type: array
-          items: { $ref: "#/components/schemas/EnvironmentAggregatePoint" }
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/EnvironmentAggregatePoint"
+              - $ref: "#/components/schemas/EnvironmentTelemetry"
 
     EnvironmentAggregatePoint:
       type: object
@@ -1123,11 +1143,27 @@ components:
         device_id: { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
-        interval_minutes: { type: integer, minimum: 1, maximum: 1440 }
+        interval_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          description: "0 untuk mode raw."
         bucket_timezone: { type: string, example: Asia/Jakarta }
+        mode:
+          type: string
+          enum: [raw, raw_decimated]
+          description: "Hadir saat interval=0; raw_decimated bila output diringkas menjadi maksimal 5000 titik."
+        decimated:
+          type: boolean
+          description: "true bila data raw diringkas menjadi maksimal 5000 titik."
+        source_points: { type: integer, description: "Jumlah baris sumber sebelum decimation." }
+        returned_points: { type: integer, description: "Jumlah titik yang dikembalikan." }
         points:
           type: array
-          items: { $ref: "#/components/schemas/FireAggregatePoint" }
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/FireAggregatePoint"
+              - $ref: "#/components/schemas/FireTelemetry"
 
     FireAggregatePoint:
       type: object

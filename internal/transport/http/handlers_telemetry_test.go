@@ -62,16 +62,30 @@ func TestParseAggregateParams(t *testing.T) {
 			wantError:  "from harus lebih awal dari to",
 		},
 		{
-			name:       "interval too small",
+			name:       "valid raw interval",
 			query:      "from=2026-01-01T00:00:00Z&to=2026-01-01T00:10:00Z&interval=0",
+			wantOK:     true,
+			wantFrom:   "2026-01-01T00:00:00Z",
+			wantTo:     "2026-01-01T00:10:00Z",
+			wantBucket: 0,
+		},
+		{
+			name:       "raw range too large",
+			query:      "from=2026-01-01T00:00:00Z&to=2026-01-09T00:00:00Z&interval=0",
 			wantStatus: http.StatusUnprocessableEntity,
-			wantError:  "interval harus antara 1 dan 1440 menit",
+			wantError:  "Rentang waktu raw maksimal 7 hari",
+		},
+		{
+			name:       "interval negative",
+			query:      "from=2026-01-01T00:00:00Z&to=2026-01-01T00:10:00Z&interval=-1",
+			wantStatus: http.StatusUnprocessableEntity,
+			wantError:  "interval harus 0 (raw) atau antara 1 dan 1440 menit",
 		},
 		{
 			name:       "interval invalid",
 			query:      "from=2026-01-01T00:00:00Z&to=2026-01-01T00:10:00Z&interval=lima",
 			wantStatus: http.StatusUnprocessableEntity,
-			wantError:  "interval harus antara 1 dan 1440 menit",
+			wantError:  "interval harus 0 (raw) atau antara 1 dan 1440 menit",
 		},
 		{
 			name:       "range too large",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,12 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrRawSourceTooLarge = errors.New("raw telemetry source exceeds limit")
+
+const (
+	rawMaxOutputPoints = 5000
+	rawMaxSourcePoints = 250000
+)
 
 type Repository struct {
 	db *gorm.DB
@@ -336,6 +343,196 @@ func (r *Repository) AggregateFire(ctx context.Context, deviceID uuid.UUID, from
 		rows[i].BucketStart = rows[i].BucketStart.UTC()
 	}
 	return rows, nil
+}
+
+type RawEnvironmentResult struct {
+	Points       []domain.TelemetryEnvironment
+	SourcePoints int
+	Decimated    bool
+}
+
+type RawFireResult struct {
+	Points       []domain.TelemetryFire
+	SourcePoints int
+	Decimated    bool
+}
+
+func (r *Repository) RawEnvironment(ctx context.Context, deviceID uuid.UUID, from, to time.Time) (RawEnvironmentResult, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&domain.TelemetryEnvironment{}).
+		Where("device_id = ? AND recorded_at >= ? AND recorded_at < ?", deviceID, from, to).
+		Count(&count).Error; err != nil {
+		return RawEnvironmentResult{}, err
+	}
+	if count > rawMaxSourcePoints {
+		return RawEnvironmentResult{}, ErrRawSourceTooLarge
+	}
+
+	rows := make([]domain.TelemetryEnvironment, 0, count)
+	if err := r.db.WithContext(ctx).
+		Where("device_id = ? AND recorded_at >= ? AND recorded_at < ?", deviceID, from, to).
+		Order("recorded_at ASC, id ASC").Find(&rows).Error; err != nil {
+		return RawEnvironmentResult{}, err
+	}
+	for i := range rows {
+		rows[i].RecordedAt = rows[i].RecordedAt.UTC()
+		rows[i].ReceivedAt = rows[i].ReceivedAt.UTC()
+	}
+
+	decimated := len(rows) > rawMaxOutputPoints
+	points := rows
+	if decimated {
+		points = decimateEnvironment(rows)
+	}
+	return RawEnvironmentResult{Points: points, SourcePoints: int(count), Decimated: decimated}, nil
+}
+
+func (r *Repository) RawFire(ctx context.Context, deviceID uuid.UUID, from, to time.Time) (RawFireResult, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&domain.TelemetryFire{}).
+		Where("device_id = ? AND recorded_at >= ? AND recorded_at < ?", deviceID, from, to).
+		Count(&count).Error; err != nil {
+		return RawFireResult{}, err
+	}
+	if count > rawMaxSourcePoints {
+		return RawFireResult{}, ErrRawSourceTooLarge
+	}
+
+	rows := make([]domain.TelemetryFire, 0, count)
+	if err := r.db.WithContext(ctx).
+		Where("device_id = ? AND recorded_at >= ? AND recorded_at < ?", deviceID, from, to).
+		Order("recorded_at ASC, id ASC").Find(&rows).Error; err != nil {
+		return RawFireResult{}, err
+	}
+	for i := range rows {
+		rows[i].RecordedAt = rows[i].RecordedAt.UTC()
+		rows[i].ReceivedAt = rows[i].ReceivedAt.UTC()
+	}
+
+	decimated := len(rows) > rawMaxOutputPoints
+	points := rows
+	if decimated {
+		points = decimateFire(rows)
+	}
+	return RawFireResult{Points: points, SourcePoints: int(count), Decimated: decimated}, nil
+}
+
+func decimateEnvironment(rows []domain.TelemetryEnvironment) []domain.TelemetryEnvironment {
+	const metricsPerBucket = 6
+	maxBuckets := rawMaxOutputPoints / metricsPerBucket
+	bucketSize := (len(rows) + maxBuckets - 1) / maxBuckets
+	selected := make([]domain.TelemetryEnvironment, 0, rawMaxOutputPoints)
+	seen := make(map[uint64]struct{}, rawMaxOutputPoints)
+
+	add := func(row *domain.TelemetryEnvironment) {
+		if row == nil {
+			return
+		}
+		if _, ok := seen[row.ID]; ok {
+			return
+		}
+		seen[row.ID] = struct{}{}
+		selected = append(selected, *row)
+	}
+
+	for start := 0; start < len(rows); start += bucketSize {
+		end := start + bucketSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		bucket := rows[start:end]
+		var minTemp, maxTemp, minHumidity, maxHumidity, minSoil, maxSoil *domain.TelemetryEnvironment
+		for i := range bucket {
+			row := &bucket[i]
+			if row.Temperature != nil {
+				if minTemp == nil || *row.Temperature < *minTemp.Temperature {
+					minTemp = row
+				}
+				if maxTemp == nil || *row.Temperature > *maxTemp.Temperature {
+					maxTemp = row
+				}
+			}
+			if row.Humidity != nil {
+				if minHumidity == nil || *row.Humidity < *minHumidity.Humidity {
+					minHumidity = row
+				}
+				if maxHumidity == nil || *row.Humidity > *maxHumidity.Humidity {
+					maxHumidity = row
+				}
+			}
+			if minSoil == nil || row.SoilMoisture < minSoil.SoilMoisture {
+				minSoil = row
+			}
+			if maxSoil == nil || row.SoilMoisture > maxSoil.SoilMoisture {
+				maxSoil = row
+			}
+		}
+		add(minTemp)
+		add(maxTemp)
+		add(minHumidity)
+		add(maxHumidity)
+		add(minSoil)
+		add(maxSoil)
+	}
+
+	sort.SliceStable(selected, func(i, j int) bool {
+		if selected[i].RecordedAt.Equal(selected[j].RecordedAt) {
+			return selected[i].ID < selected[j].ID
+		}
+		return selected[i].RecordedAt.Before(selected[j].RecordedAt)
+	})
+	return selected
+}
+
+func decimateFire(rows []domain.TelemetryFire) []domain.TelemetryFire {
+	const metricsPerBucket = 3
+	maxBuckets := rawMaxOutputPoints / metricsPerBucket
+	bucketSize := (len(rows) + maxBuckets - 1) / maxBuckets
+	selected := make([]domain.TelemetryFire, 0, rawMaxOutputPoints)
+	seen := make(map[uint64]struct{}, rawMaxOutputPoints)
+
+	add := func(row *domain.TelemetryFire) {
+		if row == nil {
+			return
+		}
+		if _, ok := seen[row.ID]; ok {
+			return
+		}
+		seen[row.ID] = struct{}{}
+		selected = append(selected, *row)
+	}
+
+	for start := 0; start < len(rows); start += bucketSize {
+		end := start + bucketSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		bucket := rows[start:end]
+		var minSmoke, maxSmoke, firstFlame *domain.TelemetryFire
+		for i := range bucket {
+			row := &bucket[i]
+			if minSmoke == nil || row.SmokeLevel < minSmoke.SmokeLevel {
+				minSmoke = row
+			}
+			if maxSmoke == nil || row.SmokeLevel > maxSmoke.SmokeLevel {
+				maxSmoke = row
+			}
+			if row.FlameDetected && firstFlame == nil {
+				firstFlame = row
+			}
+		}
+		add(firstFlame)
+		add(minSmoke)
+		add(maxSmoke)
+	}
+
+	sort.SliceStable(selected, func(i, j int) bool {
+		if selected[i].RecordedAt.Equal(selected[j].RecordedAt) {
+			return selected[i].ID < selected[j].ID
+		}
+		return selected[i].RecordedAt.Before(selected[j].RecordedAt)
+	})
+	return selected
 }
 
 func (r *Repository) LatestEnvironment(ctx context.Context, deviceID uuid.UUID) (*domain.TelemetryEnvironment, error) {
