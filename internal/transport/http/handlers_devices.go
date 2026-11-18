@@ -33,8 +33,16 @@ func (h *Handler) lookupDevice(c *gin.Context) (*domain.Device, bool) {
 }
 
 func (h *Handler) listDevices(c *gin.Context) {
+	query, ok := searchQuery(c)
+	if !ok {
+		return
+	}
 	page, perPage, limit, offset := pageParams(c)
-	devices, total, err := h.repo.ListDevices(c.Request.Context(), limit, offset)
+	devices, total, err := h.repo.ListDevices(c.Request.Context(), repository.DeviceFilter{
+		Query:  query,
+		Limit:  limit,
+		Offset: offset,
+	})
 	if err != nil {
 		h.log.Error("list devices failed", "error", err)
 		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")

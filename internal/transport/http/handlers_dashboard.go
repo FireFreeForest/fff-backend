@@ -31,7 +31,7 @@ func (h *Handler) dashboardSummary(c *gin.Context) {
 		"DARURAT": 0,
 		"UNKNOWN": 0,
 	}
-	devices, _, err := h.repo.ListDevices(ctx, 1000, 0)
+	devices, _, err := h.repo.ListDevices(ctx, repository.DeviceFilter{Limit: 1000})
 	if err == nil && len(devices) > 0 {
 		keys := make([]string, 0, len(devices))
 		for i := range devices {

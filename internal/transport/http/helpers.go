@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -48,6 +50,17 @@ func abortError(c *gin.Context, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+const maxSearchQueryLength = 100
+
+func searchQuery(c *gin.Context) (string, bool) {
+	query := strings.TrimSpace(c.Query("q"))
+	if utf8.RuneCountInString(query) > maxSearchQueryLength {
+		respondError(c, http.StatusUnprocessableEntity, "validation_error", "q maksimal 100 karakter")
+		return "", false
+	}
+	return query, true
 }
 
 func pageParams(c *gin.Context) (page, perPage, limit, offset int) {

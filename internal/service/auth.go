@@ -225,8 +225,8 @@ func (s *AuthService) CreateUser(ctx context.Context, in CreateUserInput, actorI
 	return user, nil
 }
 
-func (s *AuthService) ListUsers(ctx context.Context, limit, offset int) ([]domain.User, int64, error) {
-	return s.repo.ListUsers(ctx, limit, offset)
+func (s *AuthService) ListUsers(ctx context.Context, query string, limit, offset int) ([]domain.User, int64, error) {
+	return s.repo.ListUsers(ctx, repository.UserFilter{Query: query, Limit: limit, Offset: offset})
 }
 
 type UpdateUserInput struct {

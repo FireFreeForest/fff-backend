@@ -126,6 +126,32 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}
 	petugasToken := petugasLogin.Data.Tokens.AccessToken
 
+	var userSearch struct {
+		Data []struct {
+			Email string `json:"email"`
+			Name  string `json:"name"`
+		} `json:"data"`
+		Meta struct {
+			Total int64 `json:"total"`
+		} `json:"meta"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users?q=PETUGAS", token, nil, &userSearch)
+	if status != http.StatusOK || userSearch.Meta.Total != 1 || len(userSearch.Data) != 1 || userSearch.Data[0].Email != "petugas@fff.local" {
+		t.Fatalf("user search name status=%d total=%d data=%+v", status, userSearch.Meta.Total, userSearch.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users?q=petugas%40fff.local", token, nil, &userSearch)
+	if status != http.StatusOK || userSearch.Meta.Total != 1 || len(userSearch.Data) != 1 || userSearch.Data[0].Name != "Petugas Integration" {
+		t.Fatalf("user search email status=%d total=%d data=%+v", status, userSearch.Meta.Total, userSearch.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users?q=tidak-ada", token, nil, &userSearch)
+	if status != http.StatusOK || userSearch.Meta.Total != 0 || len(userSearch.Data) != 0 {
+		t.Fatalf("user search no match status=%d total=%d data=%+v", status, userSearch.Meta.Total, userSearch.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/users?q=+", token, nil, &userSearch)
+	if status != http.StatusOK || userSearch.Meta.Total != 2 {
+		t.Fatalf("user search empty status=%d total=%d", status, userSearch.Meta.Total)
+	}
+
 	var created struct {
 		Data struct {
 			DeviceID string `json:"device_id"`
@@ -148,6 +174,41 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}, &generated)
 	if status != http.StatusCreated || !strings.HasPrefix(generated.Data.DeviceID, "FFF-") || len(generated.Data.DeviceID) != 12 {
 		t.Fatalf("create generated device status=%d body=%+v", status, generated)
+	}
+
+	var deviceSearch struct {
+		Data []struct {
+			DeviceID     string `json:"device_id"`
+			Name         string `json:"name"`
+			LocationName string `json:"location_name"`
+		} `json:"data"`
+		Meta struct {
+			Total int64 `json:"total"`
+		} `json:"meta"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q=generated", token, nil, &deviceSearch)
+	if status != http.StatusOK || deviceSearch.Meta.Total != 1 || len(deviceSearch.Data) != 1 || deviceSearch.Data[0].DeviceID != generated.Data.DeviceID {
+		t.Fatalf("device search name status=%d total=%d data=%+v", status, deviceSearch.Meta.Total, deviceSearch.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q=Generated%20Location", token, nil, &deviceSearch)
+	if status != http.StatusOK || deviceSearch.Meta.Total != 1 || len(deviceSearch.Data) != 1 || deviceSearch.Data[0].Name != "Generated Integration Device" {
+		t.Fatalf("device search location status=%d total=%d data=%+v", status, deviceSearch.Meta.Total, deviceSearch.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q=tidak-ada", token, nil, &deviceSearch)
+	if status != http.StatusOK || deviceSearch.Meta.Total != 0 || len(deviceSearch.Data) != 0 {
+		t.Fatalf("device search no match status=%d total=%d data=%+v", status, deviceSearch.Meta.Total, deviceSearch.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q=%25", token, nil, &deviceSearch)
+	if status != http.StatusOK || deviceSearch.Meta.Total != 0 {
+		t.Fatalf("device search literal percent status=%d total=%d", status, deviceSearch.Meta.Total)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q=_", token, nil, &deviceSearch)
+	if status != http.StatusOK || deviceSearch.Meta.Total != 0 {
+		t.Fatalf("device search literal underscore status=%d total=%d", status, deviceSearch.Meta.Total)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q="+strings.Repeat("a", 101), token, nil, nil)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("device search too long status=%d", status)
 	}
 
 	var deviceStatus struct {

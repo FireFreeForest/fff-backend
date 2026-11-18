@@ -45,6 +45,13 @@ func normalizeErr(err error) error {
 	return err
 }
 
+func ilikePattern(query string) string {
+	query = strings.ReplaceAll(query, `\`, `\\`)
+	query = strings.ReplaceAll(query, `%`, `\%`)
+	query = strings.ReplaceAll(query, `_`, `\_`)
+	return "%" + query + "%"
+}
+
 // ---------------------------------------------------------------- users
 
 func (r *Repository) GetUserByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
@@ -73,13 +80,27 @@ func (r *Repository) CreateUser(ctx context.Context, u *domain.User) error {
 	return r.db.WithContext(ctx).Create(u).Error
 }
 
-func (r *Repository) ListUsers(ctx context.Context, limit, offset int) ([]domain.User, int64, error) {
+type UserFilter struct {
+	Query  string
+	Limit  int
+	Offset int
+}
+
+func (r *Repository) ListUsers(ctx context.Context, f UserFilter) ([]domain.User, int64, error) {
+	build := func() *gorm.DB {
+		q := r.db.WithContext(ctx).Model(&domain.User{})
+		if f.Query != "" {
+			pattern := ilikePattern(f.Query)
+			q = q.Where(`name ILIKE ? ESCAPE E'\\' OR email ILIKE ? ESCAPE E'\\'`, pattern, pattern)
+		}
+		return q
+	}
 	var total int64
-	if err := r.db.WithContext(ctx).Model(&domain.User{}).Count(&total).Error; err != nil {
+	if err := build().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []domain.User
-	err := r.db.WithContext(ctx).Order("created_at ASC").Limit(limit).Offset(offset).Find(&rows).Error
+	err := build().Order("created_at ASC").Limit(f.Limit).Offset(f.Offset).Find(&rows).Error
 	return rows, total, err
 }
 
@@ -176,13 +197,27 @@ func (r *Repository) DeleteDevice(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (r *Repository) ListDevices(ctx context.Context, limit, offset int) ([]domain.Device, int64, error) {
+type DeviceFilter struct {
+	Query  string
+	Limit  int
+	Offset int
+}
+
+func (r *Repository) ListDevices(ctx context.Context, f DeviceFilter) ([]domain.Device, int64, error) {
+	build := func() *gorm.DB {
+		q := r.db.WithContext(ctx).Model(&domain.Device{})
+		if f.Query != "" {
+			pattern := ilikePattern(f.Query)
+			q = q.Where(`name ILIKE ? ESCAPE E'\\' OR location_name ILIKE ? ESCAPE E'\\'`, pattern, pattern)
+		}
+		return q
+	}
 	var total int64
-	if err := r.db.WithContext(ctx).Model(&domain.Device{}).Count(&total).Error; err != nil {
+	if err := build().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []domain.Device
-	err := r.db.WithContext(ctx).Order("created_at ASC").Limit(limit).Offset(offset).Find(&rows).Error
+	err := build().Order("created_at ASC").Limit(f.Limit).Offset(f.Offset).Find(&rows).Error
 	return rows, total, err
 }
 

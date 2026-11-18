@@ -94,8 +94,12 @@ func (h *Handler) me(c *gin.Context) {
 }
 
 func (h *Handler) listUsers(c *gin.Context) {
+	query, ok := searchQuery(c)
+	if !ok {
+		return
+	}
 	page, perPage, limit, offset := pageParams(c)
-	users, total, err := h.auth.ListUsers(c.Request.Context(), limit, offset)
+	users, total, err := h.auth.ListUsers(c.Request.Context(), query, limit, offset)
 	if err != nil {
 		h.log.Error("list users failed", "error", err)
 		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")

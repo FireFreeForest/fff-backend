@@ -154,6 +154,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/Search"
       responses:
         "200":
           description: Daftar user
@@ -169,6 +170,11 @@ paths:
                         items: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "422":
+          description: Validasi gagal (misalnya q lebih dari 100 karakter)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
     post:
       tags: [Users]
       summary: Tambah user (admin)
@@ -254,6 +260,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
+        - $ref: "#/components/parameters/Search"
       responses:
         "200":
           description: Daftar device
@@ -268,6 +275,11 @@ paths:
                         type: array
                         items: { $ref: "#/components/schemas/Device" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "422":
+          description: Validasi gagal (misalnya q lebih dari 100 karakter)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
     post:
       tags: [Devices]
       summary: Tambah device (admin)
@@ -917,6 +929,11 @@ components:
       in: query
       description: "Lebar bucket dalam menit. Nilai 0 mengaktifkan mode raw tanpa rata-rata."
       schema: { type: integer, minimum: 0, maximum: 1440, default: 5 }
+    Search:
+      name: q
+      in: query
+      description: "Pencarian substring case-insensitive. Device: name/location_name. User: name/email."
+      schema: { type: string, maxLength: 100 }
     Page:
       name: page
       in: query

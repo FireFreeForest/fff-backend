@@ -152,10 +152,10 @@ Semua endpoint di bawah prefix `/api/v1`.
 | POST | `/auth/refresh` | publik | Rotasi token |
 | GET | `/auth/me` | semua | Profil user |
 | POST | `/auth/logout` | semua | Cabut refresh token |
-| GET | `/users` | admin | Daftar user |
+| GET | `/users` | admin | Daftar user; `q` mencari nama/email |
 | POST | `/users` | admin | Tambah user |
 | PATCH | `/users/:userID` | admin | Ubah user |
-| GET | `/devices` | semua | Daftar device |
+| GET | `/devices` | semua | Daftar device; `q` mencari nama/lokasi |
 | POST | `/devices` | admin | Tambah device; `device_id` opsional dan dibuat otomatis bila kosong |
 | GET | `/devices/:deviceID` | semua | Detail device |
 | PATCH | `/devices/:deviceID` | admin | Ubah device |
@@ -183,6 +183,13 @@ Semua endpoint di bawah prefix `/api/v1`.
 Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `to` (RFC3339), `page`, `per_page`.
 
 Saat `device_id` tidak dikirim pada `POST /devices`, backend membuat ID `FFF-XXXXXXXX` (8 karakter acak) dan mengembalikannya di field `device_id`. Mobile memakai ID dari respons tersebut untuk provisioning SoftAP. ID manual tetap diterima selama cocok dengan pola `A-Za-z0-9._-` sepanjang 3–64 karakter.
+
+Pencarian daftar memakai query `q` yang case-insensitive dan cocok sebagai substring. Device mencari `name` atau `location_name`; user mencari `name` atau `email`. `q` di-trim dan maksimal 100 karakter; kosong berarti tanpa filter. `meta.total` mengikuti hasil filter.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/v1/devices?q=hutan&page=1&per_page=20"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/v1/users?q=petugas&page=1&per_page=20"
+```
 
 ### Agregat dan raw telemetri
 
