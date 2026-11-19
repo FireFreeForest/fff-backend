@@ -71,7 +71,25 @@ func (h *Handler) getEvent(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")
 		return
 	}
-	respondData(c, http.StatusOK, event)
+	preview, err := h.repo.EventTimelinePreview(c.Request.Context(), id, eventTimelinePreviewLimit)
+	if err != nil {
+		h.log.Error("load event timeline preview failed", "event_id", id, "error", err)
+		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")
+		return
+	}
+	total, err := h.repo.EventTimelineCount(c.Request.Context(), id, "all")
+	if err != nil {
+		h.log.Error("count event timeline failed", "event_id", id, "error", err)
+		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")
+		return
+	}
+	items := newEventTimelineItems(preview)
+	respondData(c, http.StatusOK, eventDetailResponse{
+		Event:           *event,
+		TimelinePreview: items,
+		TimelineTotal:   total,
+		TimelineHasMore: total > int64(len(items)),
+	})
 }
 
 func (h *Handler) acknowledgeEvent(c *gin.Context) {
@@ -128,7 +146,7 @@ func (h *Handler) resolveEvent(c *gin.Context) {
 		respondError(c, http.StatusConflict, "invalid_state", "Event sudah resolved")
 		return
 	}
-	updated, err := h.repo.ResolveEvent(c.Request.Context(), id)
+	updated, err := h.repo.ResolveEvent(c.Request.Context(), id, userID)
 	if err != nil {
 		h.log.Error("resolve event failed", "error", err)
 		respondError(c, http.StatusInternalServerError, "internal_error", "Terjadi kesalahan internal")

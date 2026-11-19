@@ -155,7 +155,7 @@ Semua endpoint di bawah prefix `/api/v1`.
 | GET | `/users` | admin | Daftar user; `q` mencari nama/email |
 | POST | `/users` | admin | Tambah user |
 | PATCH | `/users/:userID` | admin | Ubah user |
-| GET | `/devices` | semua | Daftar device; `q` mencari nama/lokasi |
+| GET | `/devices` | semua | Daftar device; `q` mencari nama/lokasi/device ID |
 | POST | `/devices` | admin | Tambah device; `device_id` opsional dan dibuat otomatis bila kosong |
 | GET | `/devices/:deviceID` | semua | Detail device |
 | PATCH | `/devices/:deviceID` | admin | Ubah device |
@@ -170,9 +170,10 @@ Semua endpoint di bawah prefix `/api/v1`.
 | POST | `/devices/:deviceID/commands` | admin, petugas | Kirim command pompa |
 | GET | `/commands/:commandID` | semua | Detail command |
 | GET | `/events` | semua | Daftar event |
-| GET | `/events/:eventID` | semua | Detail event |
+| GET | `/events/:eventID` | semua | Detail event + preview linimasa |
+| GET | `/events/:eventID/timeline` | semua | Linimasa lengkap event |
 | POST | `/events/:eventID/acknowledge` | admin, petugas | Tandai event ditangani |
-| POST | `/events/:eventID/resolve` | admin, petugas | Tutup event |
+| POST | `/events/:eventID/resolve` | petugas | Tutup event |
 | GET | `/dashboard/summary` | semua | Ringkasan dashboard |
 | GET | `/geocode/reverse?lat=&lon=` | semua | Label lokasi dari koordinat (proxy Nominatim + cache Redis) |
 | POST | `/push/tokens` | semua | Daftarkan token FCM |
@@ -182,12 +183,19 @@ Semua endpoint di bawah prefix `/api/v1`.
 
 Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `to` (RFC3339), `page`, `per_page`.
 
+### Linimasa event
+
+`GET /events/:eventID` mengembalikan `resolved_by`, `timeline_preview` berisi maksimal 5 entri terakhir, `timeline_total`, dan `timeline_has_more`. Untuk riwayat lengkap gunakan `GET /events/:eventID/timeline?page=1&per_page=50&include=all`; `include=important` menyembunyikan notifikasi yang dilewati.
+
+Setiap entri mencatat `kind`, `title`, `description`, `outcome`, `level`, `actor`, `metadata`, dan `occurred_at`. Aktor `system` dipakai untuk deteksi, notifikasi, reminder, eskalasi, dan auto-resolve; aktor `user` dipakai untuk acknowledge dan resolve. Semua percobaan notifikasi dicatat sebagai `sent`, `partial`, `failed`, atau `skipped` beserta alasannya. Event lama di-backfill untuk entri created/acknowledged/resolved serta reminder/escalation yang timestamp-nya masih tersedia.
+
 Saat `device_id` tidak dikirim pada `POST /devices`, backend membuat ID `FFF-XXXXXXXX` (8 karakter acak) dan mengembalikannya di field `device_id`. Mobile memakai ID dari respons tersebut untuk provisioning SoftAP. ID manual tetap diterima selama cocok dengan pola `A-Za-z0-9._-` sepanjang 3–64 karakter.
 
-Pencarian daftar memakai query `q` yang case-insensitive dan cocok sebagai substring. Device mencari `name` atau `location_name`; user mencari `name` atau `email`. `q` di-trim dan maksimal 100 karakter; kosong berarti tanpa filter. `meta.total` mengikuti hasil filter.
+Pencarian daftar memakai query `q` yang case-insensitive dan cocok sebagai substring. Device mencari `name`, `location_name`, atau `device_id`; user mencari `name` atau `email`. `q` di-trim dan maksimal 100 karakter; kosong berarti tanpa filter. `meta.total` mengikuti hasil filter.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/v1/devices?q=hutan&page=1&per_page=20"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/v1/devices?q=FFF-VIRTUAL-DEVICE"
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/v1/users?q=petugas&page=1&per_page=20"
 ```
 

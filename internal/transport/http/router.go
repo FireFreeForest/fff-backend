@@ -85,6 +85,7 @@ func NewRouter(d Deps) *gin.Engine {
 	secured.GET("/commands/:commandID", h.getCommand)
 	secured.GET("/events", h.listEvents)
 	secured.GET("/events/:eventID", h.getEvent)
+	secured.GET("/events/:eventID/timeline", h.listEventTimeline)
 	secured.GET("/dashboard/summary", h.dashboardSummary)
 	secured.GET("/geocode/reverse", h.reverseGeocode)
 	secured.POST("/push/tokens", h.registerPushToken)

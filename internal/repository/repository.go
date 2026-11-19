@@ -208,7 +208,7 @@ func (r *Repository) ListDevices(ctx context.Context, f DeviceFilter) ([]domain.
 		q := r.db.WithContext(ctx).Model(&domain.Device{})
 		if f.Query != "" {
 			pattern := ilikePattern(f.Query)
-			q = q.Where(`name ILIKE ? ESCAPE E'\\' OR location_name ILIKE ? ESCAPE E'\\'`, pattern, pattern)
+			q = q.Where(`name ILIKE ? ESCAPE E'\\' OR location_name ILIKE ? ESCAPE E'\\' OR device_id ILIKE ? ESCAPE E'\\'`, pattern, pattern, pattern)
 		}
 		return q
 	}
@@ -623,8 +623,55 @@ func (r *Repository) CreateEventWithOutbox(ctx context.Context, ev *domain.Event
 		if err := tx.Create(ev).Error; err != nil {
 			return err
 		}
+		if err := tx.Create(newEventCreatedTimeline(ev)).Error; err != nil {
+			return err
+		}
 		return tx.Create(ob).Error
 	})
+}
+
+func newEventCreatedTimeline(ev *domain.Event) *domain.EventTimeline {
+	meta := domain.TimelineMetadata(map[string]any{
+		"event_type": ev.EventType,
+		"severity":   ev.Severity,
+		"source":     ev.Source,
+		"status":     ev.Status,
+	})
+	at := ev.TriggeredAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	message := strings.TrimSpace(ev.Message)
+	if message == "" {
+		message = "Event terdeteksi oleh sistem."
+	}
+	return &domain.EventTimeline{
+		EventID:    ev.ID,
+		Kind:       domain.TimelineEventCreated,
+		ActorType:  domain.TimelineActorSystem,
+		ActorName:  "Sistem",
+		Title:      domain.EventTitle(ev.EventType),
+		Message:    message,
+		Level:      domain.EventLevel(ev.Severity),
+		Metadata:   meta,
+		OccurredAt: at,
+		CreatedAt:  at,
+	}
+}
+
+func (r *Repository) CreateEventTimeline(ctx context.Context, t *domain.EventTimeline) error {
+	if t.OccurredAt.IsZero() {
+		t.OccurredAt = time.Now().UTC()
+	}
+	if t.CreatedAt.IsZero() {
+		t.CreatedAt = t.OccurredAt
+	}
+	if len(t.Metadata) == 0 {
+		t.Metadata = json.RawMessage("{}")
+	}
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(t).Error
 }
 
 func (r *Repository) GetEvent(ctx context.Context, id uuid.UUID) (*domain.Event, error) {
@@ -633,6 +680,64 @@ func (r *Repository) GetEvent(ctx context.Context, id uuid.UUID) (*domain.Event,
 		return nil, normalizeErr(err)
 	}
 	return &ev, nil
+}
+
+func (r *Repository) EventTimelineCount(ctx context.Context, eventID uuid.UUID, include string) (int64, error) {
+	var total int64
+	err := r.eventTimelineQuery(ctx, eventID, include).Count(&total).Error
+	return total, err
+}
+
+func (r *Repository) ListEventTimeline(ctx context.Context, eventID uuid.UUID, include string, limit, offset int) ([]domain.EventTimeline, int64, error) {
+	build := func() *gorm.DB {
+		return r.eventTimelineQuery(ctx, eventID, include)
+	}
+	var total int64
+	if err := build().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []domain.EventTimeline
+	err := build().
+		Order("occurred_at ASC, id ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(&rows).Error
+	if rows == nil {
+		rows = make([]domain.EventTimeline, 0)
+	}
+	return rows, total, err
+}
+
+func (r *Repository) EventTimelinePreview(ctx context.Context, eventID uuid.UUID, limit int) ([]domain.EventTimeline, error) {
+	if limit < 1 {
+		return []domain.EventTimeline{}, nil
+	}
+	var rows []domain.EventTimeline
+	err := r.db.WithContext(ctx).
+		Where("event_id = ?", eventID).
+		Order("occurred_at DESC, id DESC").
+		Limit(limit).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	if rows == nil {
+		rows = make([]domain.EventTimeline, 0)
+	}
+	return rows, nil
+}
+
+func (r *Repository) eventTimelineQuery(ctx context.Context, eventID uuid.UUID, include string) *gorm.DB {
+	q := r.db.WithContext(ctx).Model(&domain.EventTimeline{}).Where("event_id = ?", eventID)
+	if include == "important" {
+		q = q.Where("NOT (kind IN ? AND outcome = ?)",
+			[]domain.EventTimelineKind{domain.TimelineNotification, domain.TimelineReminder, domain.TimelineEscalation},
+			domain.TimelineOutcomeSkipped)
+	}
+	return q
 }
 
 type EventFilter struct {
@@ -713,38 +818,153 @@ func (r *Repository) MarkFireEventEscalationSent(ctx context.Context, id uuid.UU
 }
 
 func (r *Repository) AcknowledgeEvent(ctx context.Context, id, userID uuid.UUID) (bool, error) {
-	now := time.Now()
-	res := r.db.WithContext(ctx).Model(&domain.Event{}).
-		Where("id = ? AND status = ?", id, domain.EventActive).
-		Updates(map[string]any{
-			"status":          string(domain.EventAcknowledged),
-			"acknowledged_by": userID,
-			"acknowledged_at": now,
-		})
-	return res.RowsAffected > 0, res.Error
+	var updated bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user domain.User
+		if err := tx.First(&user, "id = ?", userID).Error; err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		res := tx.Model(&domain.Event{}).
+			Where("id = ? AND status = ?", id, domain.EventActive).
+			Updates(map[string]any{
+				"status":          string(domain.EventAcknowledged),
+				"acknowledged_by": userID,
+				"acknowledged_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		updated = res.RowsAffected > 0
+		if !updated {
+			return nil
+		}
+		return tx.Create(&domain.EventTimeline{
+			EventID:    id,
+			Kind:       domain.TimelineAcknowledged,
+			ActorType:  domain.TimelineActorUser,
+			ActorID:    &userID,
+			ActorName:  user.Name,
+			ActorRole:  user.Role,
+			Title:      "Event Ditangani",
+			Message:    user.Name + " menandai event sebagai ditangani.",
+			Level:      domain.TimelineLevelSuccess,
+			Metadata:   domain.TimelineMetadata(map[string]any{"from_status": string(domain.EventActive), "to_status": string(domain.EventAcknowledged)}),
+			OccurredAt: now,
+			CreatedAt:  now,
+		}).Error
+	})
+	return updated, err
 }
 
-func (r *Repository) ResolveEvent(ctx context.Context, id uuid.UUID) (bool, error) {
-	now := time.Now()
-	res := r.db.WithContext(ctx).Model(&domain.Event{}).
-		Where("id = ? AND status IN ?", id, []string{string(domain.EventActive), string(domain.EventAcknowledged)}).
-		Updates(map[string]any{
-			"status":      string(domain.EventResolved),
-			"resolved_at": now,
-		})
-	return res.RowsAffected > 0, res.Error
+func (r *Repository) ResolveEvent(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+	var updated bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user domain.User
+		if err := tx.First(&user, "id = ?", userID).Error; err != nil {
+			return err
+		}
+		var ev domain.Event
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&ev, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if ev.Status == domain.EventResolved {
+			return nil
+		}
+		now := time.Now().UTC()
+		res := tx.Model(&domain.Event{}).
+			Where("id = ? AND status IN ?", id, []string{string(domain.EventActive), string(domain.EventAcknowledged)}).
+			Updates(map[string]any{
+				"status":      string(domain.EventResolved),
+				"resolved_by": userID,
+				"resolved_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		updated = res.RowsAffected > 0
+		if !updated {
+			return nil
+		}
+		return tx.Create(&domain.EventTimeline{
+			EventID:   id,
+			Kind:      domain.TimelineResolved,
+			ActorType: domain.TimelineActorUser,
+			ActorID:   &userID,
+			ActorName: user.Name,
+			ActorRole: user.Role,
+			Title:     "Event Diselesaikan",
+			Message:   user.Name + " menandai event sebagai selesai.",
+			Level:     domain.TimelineLevelSuccess,
+			Metadata: domain.TimelineMetadata(map[string]any{
+				"from_status": string(ev.Status),
+				"to_status":   string(domain.EventResolved),
+				"reason":      "manual",
+			}),
+			OccurredAt: now,
+			CreatedAt:  now,
+		}).Error
+	})
+	return updated, err
 }
 
 func (r *Repository) ResolveActiveEventByType(ctx context.Context, deviceID uuid.UUID, eventType domain.EventType) (bool, error) {
-	now := time.Now()
-	res := r.db.WithContext(ctx).Model(&domain.Event{}).
-		Where("device_id = ? AND event_type = ? AND status IN ?", deviceID, eventType,
-			[]string{string(domain.EventActive), string(domain.EventAcknowledged)}).
-		Updates(map[string]any{
-			"status":      string(domain.EventResolved),
-			"resolved_at": now,
-		})
-	return res.RowsAffected > 0, res.Error
+	var updated bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var rows []domain.Event
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("device_id = ? AND event_type = ? AND status IN ?", deviceID, eventType,
+				[]string{string(domain.EventActive), string(domain.EventAcknowledged)}).
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		now := time.Now().UTC()
+		ids := make([]uuid.UUID, 0, len(rows))
+		for i := range rows {
+			ids = append(ids, rows[i].ID)
+		}
+		res := tx.Model(&domain.Event{}).
+			Where("id IN ? AND status IN ?", ids,
+				[]string{string(domain.EventActive), string(domain.EventAcknowledged)}).
+			Updates(map[string]any{
+				"status":      string(domain.EventResolved),
+				"resolved_by": nil,
+				"resolved_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		updated = res.RowsAffected > 0
+		if !updated {
+			return nil
+		}
+		for i := range rows {
+			if err := tx.Create(&domain.EventTimeline{
+				EventID:   rows[i].ID,
+				Kind:      domain.TimelineAutoResolved,
+				ActorType: domain.TimelineActorSystem,
+				ActorName: "Sistem",
+				Title:     "Event Diselesaikan Otomatis",
+				Message:   "Kondisi perangkat kembali normal; event ditutup otomatis oleh sistem.",
+				Level:     domain.TimelineLevelSuccess,
+				Metadata: domain.TimelineMetadata(map[string]any{
+					"from_status": string(rows[i].Status),
+					"to_status":   string(domain.EventResolved),
+					"reason":      "condition_normal",
+					"event_type":  string(eventType),
+				}),
+				OccurredAt: now,
+				CreatedAt:  now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return updated, err
 }
 
 type SeverityCount struct {

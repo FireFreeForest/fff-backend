@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"firefreeforest/backend/internal/domain"
@@ -48,5 +49,46 @@ func TestNotifierAllowsEvent(t *testing.T) {
 				t.Fatalf("allowsEvent(%s) = %v, want %v", tc.eventType, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNotificationOutcome(t *testing.T) {
+	tests := []struct {
+		name       string
+		sent       int
+		err        error
+		want       domain.EventTimelineOutcome
+		wantReason string
+	}{
+		{name: "sent", sent: 2, want: domain.TimelineOutcomeSent, wantReason: "delivered"},
+		{name: "partial", sent: 1, err: context.DeadlineExceeded, want: domain.TimelineOutcomePartial, wantReason: "partial_delivery"},
+		{name: "failed", err: context.DeadlineExceeded, want: domain.TimelineOutcomeFailed, wantReason: "send_failed"},
+		{name: "no delivery", want: domain.TimelineOutcomeFailed, wantReason: "no_delivery"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := notificationOutcome(tc.sent, tc.err)
+			if got != tc.want || reason != tc.wantReason {
+				t.Fatalf("notificationOutcome(%d, %v) = (%s, %s), want (%s, %s)", tc.sent, tc.err, got, reason, tc.want, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestNotificationTimelineTitle(t *testing.T) {
+	tests := []struct {
+		kind    domain.EventTimelineKind
+		outcome domain.EventTimelineOutcome
+		want    string
+	}{
+		{kind: domain.TimelineNotification, outcome: domain.TimelineOutcomeSent, want: "Peringatan Dikirim"},
+		{kind: domain.TimelineNotification, outcome: domain.TimelineOutcomeFailed, want: "Peringatan Gagal Dikirim"},
+		{kind: domain.TimelineReminder, outcome: domain.TimelineOutcomeSkipped, want: "Peringatan Ulang Dilewati"},
+		{kind: domain.TimelineEscalation, outcome: domain.TimelineOutcomePartial, want: "Eskalasi Darurat Terkirim Sebagian"},
+	}
+	for _, tc := range tests {
+		if got := domain.NotificationTimelineTitle(tc.kind, tc.outcome); got != tc.want {
+			t.Fatalf("NotificationTimelineTitle(%s, %s) = %q, want %q", tc.kind, tc.outcome, got, tc.want)
+		}
 	}
 }

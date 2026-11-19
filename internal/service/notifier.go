@@ -43,22 +43,38 @@ func (n *Notifier) allowsEvent(eventType domain.EventType) bool {
 }
 
 func (n *Notifier) NotifyEvent(ctx context.Context, device *domain.Device, ev *domain.Event) {
-	if n == nil || !n.fcm.Enabled() || ev == nil {
+	if n == nil || ev == nil {
+		return
+	}
+	if n.fcm == nil || !n.fcm.Enabled() {
+		n.recordNotification(ctx, ev, domain.TimelineNotification, domain.TimelineOutcomeSkipped, "fcm_disabled",
+			"Peringatan tidak dikirim karena FCM tidak aktif.", nil)
+		return
+	}
+	if device == nil {
 		return
 	}
 	if domain.SeverityRank(ev.Severity) < domain.SeverityRank(n.minSeverity) {
+		n.recordNotification(ctx, ev, domain.TimelineNotification, domain.TimelineOutcomeSkipped, "severity_below_min",
+			"Peringatan dilewati karena severity di bawah ambang notifikasi.", nil)
 		return
 	}
 	if !n.allowsEvent(ev.EventType) {
+		n.recordNotification(ctx, ev, domain.TimelineNotification, domain.TimelineOutcomeSkipped, "event_type_filtered",
+			"Peringatan dilewati karena tipe event tidak diaktifkan.", nil)
 		return
 	}
 
 	tokens, err := n.repo.ListNotificationTokens(ctx, []domain.UserRole{domain.RoleAdmin, domain.RolePetugas})
 	if err != nil {
 		n.log.Warn("failed to load push tokens", "error", err)
+		n.recordNotification(ctx, ev, domain.TimelineNotification, domain.TimelineOutcomeFailed, "load_tokens_failed",
+			"Peringatan gagal disiapkan karena token penerima tidak dapat dimuat.", map[string]any{"error": timelineError(err)})
 		return
 	}
 	if len(tokens) == 0 {
+		n.recordNotification(ctx, ev, domain.TimelineNotification, domain.TimelineOutcomeSkipped, "no_recipients",
+			"Peringatan dilewati karena tidak ada token penerima.", nil)
 		return
 	}
 	values := make([]string, 0, len(tokens))
@@ -94,29 +110,66 @@ func (n *Notifier) NotifyEvent(ctx context.Context, device *domain.Device, ev *d
 			n.log.Warn("failed to delete invalid push tokens", "error", err)
 		}
 	}
+
+	outcome, reason := notificationOutcome(sent, err)
+	meta := map[string]any{
+		"notification_type": "event",
+		"channel":           channelID,
+		"recipient_count":   len(values),
+		"sent_count":        sent,
+		"invalid_count":     len(invalid),
+	}
+	if err != nil {
+		meta["error"] = timelineError(err)
+	}
+	n.recordNotification(ctx, ev, domain.TimelineNotification, outcome, reason,
+		notificationSentMessage(outcome, sent, len(values)), meta)
 }
 
 // NotifyFireFollowUp sends a reminder or escalation for an unacknowledged fire event.
 func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device, ev *domain.Event, escalation bool) bool {
-	if n == nil || n.fcm == nil || !n.fcm.Enabled() || device == nil || ev == nil {
+	kind := domain.TimelineReminder
+	notificationType := "fire_reminder"
+	if escalation {
+		kind = domain.TimelineEscalation
+		notificationType = "fire_escalation"
+	}
+	if ev == nil {
+		return false
+	}
+	if n == nil || n.fcm == nil || !n.fcm.Enabled() {
+		n.recordNotification(ctx, ev, kind, domain.TimelineOutcomeSkipped, "fcm_disabled",
+			"Notifikasi tidak dikirim karena FCM tidak aktif.", map[string]any{"notification_type": notificationType})
+		return false
+	}
+	if device == nil {
 		return false
 	}
 	if ev.EventType != domain.EventFireDetected || ev.Status != domain.EventActive {
 		return false
 	}
 	if domain.SeverityRank(ev.Severity) < domain.SeverityRank(n.minSeverity) {
+		n.recordNotification(ctx, ev, kind, domain.TimelineOutcomeSkipped, "severity_below_min",
+			"Notifikasi dilewati karena severity di bawah ambang.", map[string]any{"notification_type": notificationType})
 		return false
 	}
 	if !n.allowsEvent(ev.EventType) {
+		n.recordNotification(ctx, ev, kind, domain.TimelineOutcomeSkipped, "event_type_filtered",
+			"Notifikasi dilewati karena tipe event tidak diaktifkan.", map[string]any{"notification_type": notificationType})
 		return false
 	}
 
 	tokens, err := n.repo.ListNotificationTokens(ctx, []domain.UserRole{domain.RoleAdmin, domain.RolePetugas})
 	if err != nil {
 		n.log.Warn("failed to load follow-up push tokens", "event_id", ev.ID, "error", err)
+		n.recordNotification(ctx, ev, kind, domain.TimelineOutcomeFailed, "load_tokens_failed",
+			"Notifikasi gagal disiapkan karena token penerima tidak dapat dimuat.",
+			map[string]any{"notification_type": notificationType, "error": timelineError(err)})
 		return false
 	}
 	if len(tokens) == 0 {
+		n.recordNotification(ctx, ev, kind, domain.TimelineOutcomeSkipped, "no_recipients",
+			"Notifikasi dilewati karena tidak ada token penerima.", map[string]any{"notification_type": notificationType})
 		return false
 	}
 
@@ -131,11 +184,9 @@ func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device
 	}
 	title := "PENGINGAT: Kebakaran belum diakui"
 	body := fmt.Sprintf("Kebakaran di %s (%s) belum diakui petugas setelah 2 menit. Segera periksa lokasi.", name, device.DeviceID)
-	notificationType := "fire_reminder"
 	if escalation {
 		title = "ESKALASI DARURAT: Kebakaran belum ditangani"
 		body = fmt.Sprintf("Kebakaran di %s (%s) belum ditangani selama 5 menit. Segera lakukan penanganan.", name, device.DeviceID)
-		notificationType = "fire_escalation"
 	}
 
 	channelID, sound := notificationChannel(ev.EventType)
@@ -163,7 +214,96 @@ func (n *Notifier) NotifyFireFollowUp(ctx context.Context, device *domain.Device
 			n.log.Warn("failed to delete invalid push tokens", "error", err)
 		}
 	}
+
+	outcome, reason := notificationOutcome(sent, sendErr)
+	meta := map[string]any{
+		"notification_type": notificationType,
+		"channel":           channelID,
+		"recipient_count":   len(values),
+		"sent_count":        sent,
+		"invalid_count":     len(invalid),
+	}
+	if sendErr != nil {
+		meta["error"] = timelineError(sendErr)
+	}
+	n.recordNotification(ctx, ev, kind, outcome, reason,
+		notificationSentMessage(outcome, sent, len(values)), meta)
 	return sent > 0
+}
+
+func (n *Notifier) recordNotification(
+	ctx context.Context,
+	ev *domain.Event,
+	kind domain.EventTimelineKind,
+	outcome domain.EventTimelineOutcome,
+	reason string,
+	message string,
+	meta map[string]any,
+) {
+	if n == nil || n.repo == nil || ev == nil {
+		return
+	}
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["reason"] = reason
+	var dedupe *string
+	if outcome == domain.TimelineOutcomeSkipped {
+		key := fmt.Sprintf("%s:%s:%s", ev.ID, kind, reason)
+		dedupe = &key
+	}
+	entry := &domain.EventTimeline{
+		EventID:   ev.ID,
+		Kind:      kind,
+		Outcome:   &outcome,
+		ActorType: domain.TimelineActorSystem,
+		ActorName: "Sistem",
+		Title:     domain.NotificationTimelineTitle(kind, outcome),
+		Message:   message,
+		Level:     domain.NotificationTimelineLevel(outcome),
+		Metadata:  domain.TimelineMetadata(meta),
+		DedupeKey: dedupe,
+	}
+	if err := n.repo.CreateEventTimeline(ctx, entry); err != nil {
+		n.log.Warn("failed to write event timeline notification", "event_id", ev.ID, "kind", kind, "error", err)
+	}
+}
+
+func notificationOutcome(sent int, err error) (domain.EventTimelineOutcome, string) {
+	if err != nil {
+		if sent > 0 {
+			return domain.TimelineOutcomePartial, "partial_delivery"
+		}
+		return domain.TimelineOutcomeFailed, "send_failed"
+	}
+	if sent > 0 {
+		return domain.TimelineOutcomeSent, "delivered"
+	}
+	return domain.TimelineOutcomeFailed, "no_delivery"
+}
+
+func notificationSentMessage(outcome domain.EventTimelineOutcome, sent, total int) string {
+	switch outcome {
+	case domain.TimelineOutcomePartial:
+		return fmt.Sprintf("Peringatan terkirim ke %d dari %d perangkat.", sent, total)
+	case domain.TimelineOutcomeSent:
+		return fmt.Sprintf("Peringatan berhasil dikirim ke %d perangkat.", sent)
+	case domain.TimelineOutcomeSkipped:
+		return "Peringatan tidak dikirim."
+	default:
+		return "Peringatan gagal dikirim."
+	}
+}
+
+func timelineError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if len(message) > 500 {
+		return message[:500]
+	}
+	return message
 }
 
 func notificationChannel(eventType domain.EventType) (string, string) {

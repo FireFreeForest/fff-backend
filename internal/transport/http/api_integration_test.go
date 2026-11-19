@@ -50,7 +50,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open postgres: %v", err)
 	}
-	if err := db.Exec(`TRUNCATE audit_logs, outbox, commands, events, telemetry_fire,
+	if err := db.Exec(`TRUNCATE event_timeline, audit_logs, outbox, commands, events, telemetry_fire,
 		telemetry_environment, devices, refresh_tokens, push_tokens, users RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -194,6 +194,10 @@ func TestAPIFlowIntegration(t *testing.T) {
 	if status != http.StatusOK || deviceSearch.Meta.Total != 1 || len(deviceSearch.Data) != 1 || deviceSearch.Data[0].Name != "Generated Integration Device" {
 		t.Fatalf("device search location status=%d total=%d data=%+v", status, deviceSearch.Meta.Total, deviceSearch.Data)
 	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q="+generated.Data.DeviceID, token, nil, &deviceSearch)
+	if status != http.StatusOK || deviceSearch.Meta.Total != 1 || len(deviceSearch.Data) != 1 || deviceSearch.Data[0].DeviceID != generated.Data.DeviceID {
+		t.Fatalf("device search device_id status=%d total=%d data=%+v", status, deviceSearch.Meta.Total, deviceSearch.Data)
+	}
 	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices?q=tidak-ada", token, nil, &deviceSearch)
 	if status != http.StatusOK || deviceSearch.Meta.Total != 0 || len(deviceSearch.Data) != 0 {
 		t.Fatalf("device search no match status=%d total=%d data=%+v", status, deviceSearch.Meta.Total, deviceSearch.Data)
@@ -266,6 +270,9 @@ func TestAPIFlowIntegration(t *testing.T) {
 	if evaluation.RiskLevel != service.RiskDarurat || len(evaluation.Events) != 1 {
 		t.Fatalf("evaluation risk=%s events=%d", evaluation.RiskLevel, len(evaluation.Events))
 	}
+	notifier := service.NewNotifier(nil, repo, domain.SeverityError, nil, log)
+	notifier.NotifyEvent(context.Background(), device, evaluation.Events[0])
+	notifier.NotifyEvent(context.Background(), device, evaluation.Events[0])
 
 	aggregateBase := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	envRows := []*domain.TelemetryEnvironment{
@@ -459,6 +466,33 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}
 	eventID := events.Data[0].ID
 
+	var eventDetail struct {
+		Data struct {
+			ID              string  `json:"id"`
+			ResolvedBy      *string `json:"resolved_by"`
+			TimelineTotal   int64   `json:"timeline_total"`
+			TimelineHasMore bool    `json:"timeline_has_more"`
+			TimelinePreview []struct {
+				Kind  string `json:"kind"`
+				Title string `json:"title"`
+				Actor struct {
+					Type string `json:"type"`
+					Name string `json:"name"`
+				} `json:"actor"`
+			} `json:"timeline_preview"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID, token, nil, &eventDetail)
+	if status != http.StatusOK || eventDetail.Data.ID != eventID || eventDetail.Data.TimelineTotal != 2 || eventDetail.Data.TimelineHasMore || len(eventDetail.Data.TimelinePreview) != 2 {
+		t.Fatalf("event detail initial timeline status=%d body=%+v", status, eventDetail.Data)
+	}
+	if eventDetail.Data.TimelinePreview[0].Kind != string(domain.TimelineEventCreated) || eventDetail.Data.TimelinePreview[0].Actor.Type != string(domain.TimelineActorSystem) || eventDetail.Data.TimelinePreview[0].Actor.Name != "Sistem" {
+		t.Fatalf("event detail created timeline = %+v", eventDetail.Data.TimelinePreview[0])
+	}
+	if eventDetail.Data.TimelinePreview[1].Kind != string(domain.TimelineNotification) {
+		t.Fatalf("event detail notification timeline = %+v", eventDetail.Data.TimelinePreview[1])
+	}
+
 	var acked struct {
 		Data struct {
 			Status string `json:"status"`
@@ -467,6 +501,39 @@ func TestAPIFlowIntegration(t *testing.T) {
 	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/events/"+eventID+"/acknowledge", token, nil, &acked)
 	if status != http.StatusOK || acked.Data.Status != string(domain.EventAcknowledged) {
 		t.Fatalf("ack status=%d event_status=%q", status, acked.Data.Status)
+	}
+
+	var timeline struct {
+		Data []struct {
+			Kind  string `json:"kind"`
+			Title string `json:"title"`
+			Actor struct {
+				Type string `json:"type"`
+				Name string `json:"name"`
+			} `json:"actor"`
+		} `json:"data"`
+		Meta struct {
+			Total int64 `json:"total"`
+		} `json:"meta"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID+"/timeline?page=1&per_page=1", token, nil, &timeline)
+	if status != http.StatusOK || timeline.Meta.Total != 3 || len(timeline.Data) != 1 || timeline.Data[0].Kind != string(domain.TimelineEventCreated) {
+		t.Fatalf("event timeline pagination status=%d body=%+v", status, timeline)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID+"/timeline", token, nil, &timeline)
+	if status != http.StatusOK || timeline.Meta.Total != 3 || len(timeline.Data) != 3 {
+		t.Fatalf("event timeline after ack status=%d body=%+v", status, timeline)
+	}
+	if timeline.Data[2].Kind != string(domain.TimelineAcknowledged) || timeline.Data[2].Actor.Type != string(domain.TimelineActorUser) || timeline.Data[2].Actor.Name != "Administrator" {
+		t.Fatalf("event ack timeline = %+v", timeline.Data[2])
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID+"/timeline?include=important", token, nil, &timeline)
+	if status != http.StatusOK || timeline.Meta.Total != 2 || len(timeline.Data) != 2 {
+		t.Fatalf("event timeline important status=%d body=%+v", status, timeline)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID+"/timeline?include=invalid", token, nil, nil)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("event timeline invalid include status=%d", status)
 	}
 
 	var resolved struct {
@@ -482,6 +549,34 @@ func TestAPIFlowIntegration(t *testing.T) {
 	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/events/"+eventID+"/resolve", petugasToken, nil, &resolved)
 	if status != http.StatusOK || resolved.Data.Status != string(domain.EventResolved) {
 		t.Fatalf("petugas resolve status=%d event_status=%q", status, resolved.Data.Status)
+	}
+
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID, token, nil, &eventDetail)
+	if status != http.StatusOK || eventDetail.Data.ResolvedBy == nil || *eventDetail.Data.ResolvedBy == "" || eventDetail.Data.TimelineTotal != 4 || eventDetail.Data.TimelineHasMore {
+		t.Fatalf("event detail resolved timeline status=%d body=%+v", status, eventDetail.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID+"/timeline", token, nil, &timeline)
+	if status != http.StatusOK || timeline.Meta.Total != 4 || len(timeline.Data) != 4 {
+		t.Fatalf("event timeline after resolve status=%d body=%+v", status, timeline)
+	}
+	if timeline.Data[3].Kind != string(domain.TimelineResolved) || timeline.Data[3].Actor.Type != string(domain.TimelineActorUser) || timeline.Data[3].Actor.Name != "Petugas Integration" {
+		t.Fatalf("event resolved timeline = %+v", timeline.Data[3])
+	}
+
+	autoEvent, err := risk.EmitDeviceEvent(context.Background(), device, domain.EventSensorError, "integration", "Sensor integration error")
+	if err != nil || autoEvent == nil {
+		t.Fatalf("emit sensor event event=%+v err=%v", autoEvent, err)
+	}
+	updated, err := repo.ResolveActiveEventByType(context.Background(), device.ID, domain.EventSensorError)
+	if err != nil || !updated {
+		t.Fatalf("auto resolve updated=%v err=%v", updated, err)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+autoEvent.ID.String()+"/timeline", token, nil, &timeline)
+	if status != http.StatusOK || timeline.Meta.Total != 2 || len(timeline.Data) != 2 {
+		t.Fatalf("auto resolve timeline status=%d body=%+v", status, timeline)
+	}
+	if timeline.Data[1].Kind != string(domain.TimelineAutoResolved) || timeline.Data[1].Actor.Type != string(domain.TimelineActorSystem) || timeline.Data[1].Actor.Name != "Sistem" {
+		t.Fatalf("auto resolved timeline = %+v", timeline.Data[1])
 	}
 
 	var dashboard struct {

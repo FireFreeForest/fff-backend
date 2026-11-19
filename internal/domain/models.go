@@ -226,6 +226,7 @@ type Event struct {
 	TriggeredAt      time.Time       `json:"triggered_at"`
 	AcknowledgedBy   *uuid.UUID      `gorm:"type:uuid" json:"acknowledged_by,omitempty"`
 	AcknowledgedAt   *time.Time      `json:"acknowledged_at,omitempty"`
+	ResolvedBy       *uuid.UUID      `gorm:"type:uuid" json:"resolved_by,omitempty"`
 	ResolvedAt       *time.Time      `json:"resolved_at,omitempty"`
 	ReminderSentAt   *time.Time      `gorm:"column:reminder_sent_at" json:"-"`
 	EscalationSentAt *time.Time      `gorm:"column:escalation_sent_at" json:"-"`
