@@ -12,8 +12,8 @@ info:
     binary stdio `mcp`, menggunakan header `Authorization: Bearer mcp_...`
     dengan API key yang dikelola lewat `/admin/mcp-keys`.
 servers:
-  - url: http://localhost:8080/api/v1
-    description: Local development
+  - url: /api/v1
+    description: Same origin as the docs.
 security:
   - bearerAuth: []
 tags:
@@ -195,7 +195,12 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, minLength: 8 }
                 name: { type: string }
-                role: { type: string, enum: [admin, petugas, viewer], default: viewer }
+                role:
+                  {
+                    type: string,
+                    enum: [admin, petugas, viewer],
+                    default: viewer,
+                  }
       responses:
         "201":
           description: User dibuat
@@ -375,7 +380,8 @@ paths:
             schema:
               type: object
               properties:
-                grace_seconds: { type: integer, minimum: 0, maximum: 604800, default: 0 }
+                grace_seconds:
+                  { type: integer, minimum: 0, maximum: 604800, default: 0 }
       responses:
         "200":
           description: MCP API key dirotasi
@@ -583,7 +589,8 @@ paths:
                     properties:
                       data:
                         type: array
-                        items: { $ref: "#/components/schemas/EnvironmentTelemetry" }
+                        items:
+                          { $ref: "#/components/schemas/EnvironmentTelemetry" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /devices/{deviceID}/telemetry/environment/aggregate:
@@ -613,7 +620,8 @@ paths:
                   - $ref: "#/components/schemas/DataEnvelope"
                   - type: object
                     properties:
-                      data: { $ref: "#/components/schemas/EnvironmentAggregate" }
+                      data:
+                        { $ref: "#/components/schemas/EnvironmentAggregate" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1217,7 +1225,8 @@ components:
     GeocodeResult:
       type: object
       properties:
-        label: { type: string, example: "Jalan Merdeka, Palangka, Palangka Raya" }
+        label:
+          { type: string, example: "Jalan Merdeka, Palangka, Palangka Raya" }
         latitude: { type: number, example: -2.2 }
         longitude: { type: number, example: 113.9 }
         provider: { type: string, example: openstreetmap }
@@ -1250,7 +1259,12 @@ components:
       type: object
       properties:
         id: { type: integer, format: int64, readOnly: true }
-        device_id: { type: string, format: uuid, description: "ID internal device (UUID), bukan kode device_id" }
+        device_id:
+          {
+            type: string,
+            format: uuid,
+            description: "ID internal device (UUID), bukan kode device_id",
+          }
         temperature:
           type: number
           nullable: true
@@ -1275,7 +1289,12 @@ components:
       type: object
       properties:
         id: { type: integer, format: int64, readOnly: true }
-        device_id: { type: string, format: uuid, description: "ID internal device (UUID), bukan kode device_id" }
+        device_id:
+          {
+            type: string,
+            format: uuid,
+            description: "ID internal device (UUID), bukan kode device_id",
+          }
         flame_detected: { type: boolean }
         flame_level:
           type: integer
@@ -1296,7 +1315,8 @@ components:
     EnvironmentAggregate:
       type: object
       properties:
-        device_id: { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
+        device_id:
+          { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
         interval_minutes:
@@ -1312,8 +1332,13 @@ components:
         decimated:
           type: boolean
           description: "true bila data raw diringkas menjadi maksimal 5000 titik."
-        source_points: { type: integer, description: "Jumlah baris sumber sebelum decimation." }
-        returned_points: { type: integer, description: "Jumlah titik yang dikembalikan." }
+        source_points:
+          {
+            type: integer,
+            description: "Jumlah baris sumber sebelum decimation.",
+          }
+        returned_points:
+          { type: integer, description: "Jumlah titik yang dikembalikan." }
         points:
           type: array
           items:
@@ -1350,7 +1375,8 @@ components:
     FireAggregate:
       type: object
       properties:
-        device_id: { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
+        device_id:
+          { type: string, description: "Kode device, misalnya FFF-ABCDEFGH" }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
         interval_minutes:
@@ -1366,8 +1392,13 @@ components:
         decimated:
           type: boolean
           description: "true bila data raw diringkas menjadi maksimal 5000 titik."
-        source_points: { type: integer, description: "Jumlah baris sumber sebelum decimation." }
-        returned_points: { type: integer, description: "Jumlah titik yang dikembalikan." }
+        source_points:
+          {
+            type: integer,
+            description: "Jumlah baris sumber sebelum decimation.",
+          }
+        returned_points:
+          { type: integer, description: "Jumlah titik yang dikembalikan." }
         points:
           type: array
           items:
@@ -1446,7 +1477,16 @@ components:
         event_id: { type: string, format: uuid }
         kind:
           type: string
-          enum: [CREATED, NOTIFICATION, REMINDER, ESCALATION, ACKNOWLEDGED, RESOLVED, AUTO_RESOLVED]
+          enum:
+            [
+              CREATED,
+              NOTIFICATION,
+              REMINDER,
+              ESCALATION,
+              ACKNOWLEDGED,
+              RESOLVED,
+              AUTO_RESOLVED,
+            ]
         title: { type: string }
         description: { type: string }
         outcome:
@@ -1480,7 +1520,8 @@ components:
         action: { type: string, enum: [SET_PUMP] }
         payload: { type: object }
         origin: { type: string, enum: [manual, system, mcp] }
-        status: { type: string, enum: [pending, sent, success, failed, timeout] }
+        status:
+          { type: string, enum: [pending, sent, success, failed, timeout] }
         issued_by: { type: string, format: uuid, nullable: true }
         sent_at: { type: string, format: date-time, nullable: true }
         acked_at: { type: string, format: date-time, nullable: true }
@@ -1493,9 +1534,20 @@ components:
       type: object
       properties:
         device: { $ref: "#/components/schemas/Device" }
-        environment: { type: object, allOf: [{ $ref: "#/components/schemas/EnvironmentTelemetry" }], nullable: true }
-        fire: { type: object, allOf: [{ $ref: "#/components/schemas/FireTelemetry" }], nullable: true }
-        risk_level: { type: string, enum: [NORMAL, WASPADA, BAHAYA, DARURAT, UNKNOWN] }
+        environment:
+          {
+            type: object,
+            allOf: [{ $ref: "#/components/schemas/EnvironmentTelemetry" }],
+            nullable: true,
+          }
+        fire:
+          {
+            type: object,
+            allOf: [{ $ref: "#/components/schemas/FireTelemetry" }],
+            nullable: true,
+          }
+        risk_level:
+          { type: string, enum: [NORMAL, WASPADA, BAHAYA, DARURAT, UNKNOWN] }
 
     DeviceStatus:
       type: object
@@ -1505,9 +1557,20 @@ components:
         last_seen_at: { type: string, format: date-time, nullable: true }
         online_since: { type: string, format: date-time, nullable: true }
         uptime_seconds: { type: integer, format: int64 }
-        environment: { type: object, allOf: [{ $ref: "#/components/schemas/EnvironmentTelemetry" }], nullable: true }
-        fire: { type: object, allOf: [{ $ref: "#/components/schemas/FireTelemetry" }], nullable: true }
-        risk_level: { type: string, enum: [NORMAL, WASPADA, BAHAYA, DARURAT, UNKNOWN] }
+        environment:
+          {
+            type: object,
+            allOf: [{ $ref: "#/components/schemas/EnvironmentTelemetry" }],
+            nullable: true,
+          }
+        fire:
+          {
+            type: object,
+            allOf: [{ $ref: "#/components/schemas/FireTelemetry" }],
+            nullable: true,
+          }
+        risk_level:
+          { type: string, enum: [NORMAL, WASPADA, BAHAYA, DARURAT, UNKNOWN] }
         server_time: { type: string, format: date-time }
 
     DashboardSummary:
