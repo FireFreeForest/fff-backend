@@ -217,6 +217,7 @@ type TelemetryFireBucket struct {
 type Event struct {
 	ID               uuid.UUID       `gorm:"type:uuid;primaryKey" json:"id"`
 	DeviceID         uuid.UUID       `gorm:"type:uuid;not null" json:"device_id"`
+	Device           *Device         `gorm:"foreignKey:DeviceID;references:ID;belongsTo" json:"device,omitempty"`
 	EventType        EventType       `gorm:"type:text;not null" json:"event_type"`
 	Severity         Severity        `gorm:"type:text;not null" json:"severity"`
 	Source           string          `json:"source"`

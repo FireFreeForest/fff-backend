@@ -183,6 +183,8 @@ Semua endpoint di bawah prefix `/api/v1`.
 
 Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `to` (RFC3339), `page`, `per_page`.
 
+Setiap response event menyertakan objek `device` lengkap, sehingga klien tidak perlu lookup device terpisah. Field `device_id` pada event adalah UUID internal; kode perangkat (mis. `FFF-A1B2C3D4`) ada di `device.device_id`.
+
 ### Linimasa event
 
 `GET /events/:eventID` mengembalikan `resolved_by`, `timeline_preview` berisi maksimal 5 entri terakhir, `timeline_total`, dan `timeline_has_more`. Untuk riwayat lengkap gunakan `GET /events/:eventID/timeline?page=1&per_page=50&include=all`; `include=important` menyembunyikan notifikasi yang dilewati.
@@ -247,6 +249,8 @@ curl -X POST http://localhost:8080/api/v1/devices/FFF-VIRTUAL-DEVICE/commands \
 ```
 
 Tipe: `connected`, `telemetry.environment`, `telemetry.fire`, `event.created`, `event.resolved`, `risk.updated`, `device.status`, `command.issued`, `command.ack`, `command.timeout`.
+
+Payload `event.created`, `event.resolved`, dan `event.updated` menyertakan `data.event.device` berisi data device lengkap, sama seperti response REST event.
 
 Aplikasi Flutter memakai satu koneksi WebSocket global setelah login. Node dan detail node diperbarui langsung dari event; Analitik dan Riwayat memakai refresh debounce. Setelah reconnect, aplikasi meminta ulang tiket dan memuat ulang data untuk mengejar event yang terlewat.
 

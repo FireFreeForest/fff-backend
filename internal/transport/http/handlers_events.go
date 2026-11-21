@@ -167,9 +167,13 @@ func (h *Handler) publishEventUpdate(c *gin.Context, eventID uuid.UUID, eventTyp
 	if err != nil {
 		return
 	}
-	device, err := h.repo.GetDeviceByID(c.Request.Context(), event.DeviceID)
-	if err != nil {
-		return
+	device := event.Device
+	if device == nil {
+		device, err = h.repo.GetDeviceByID(c.Request.Context(), event.DeviceID)
+		if err != nil {
+			return
+		}
+		event.Device = device
 	}
 	_ = realtime.Publish(c.Request.Context(), h.rdb, realtime.Envelope{
 		Type:     eventType,

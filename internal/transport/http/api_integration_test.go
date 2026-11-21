@@ -455,6 +455,10 @@ func TestAPIFlowIntegration(t *testing.T) {
 		Data []struct {
 			ID     string `json:"id"`
 			Status string `json:"status"`
+			Device struct {
+				ID       string `json:"id"`
+				DeviceID string `json:"device_id"`
+			} `json:"device"`
 		} `json:"data"`
 		Meta struct {
 			Total int64 `json:"total"`
@@ -464,6 +468,9 @@ func TestAPIFlowIntegration(t *testing.T) {
 	if status != http.StatusOK || events.Meta.Total < 1 || len(events.Data) == 0 {
 		t.Fatalf("list active events status=%d total=%d", status, events.Meta.Total)
 	}
+	if events.Data[0].Device.ID == "" || events.Data[0].Device.DeviceID != "TEST-001" {
+		t.Fatalf("list event device = %+v", events.Data[0].Device)
+	}
 	eventID := events.Data[0].ID
 
 	var eventDetail struct {
@@ -472,6 +479,10 @@ func TestAPIFlowIntegration(t *testing.T) {
 			ResolvedBy      *string `json:"resolved_by"`
 			TimelineTotal   int64   `json:"timeline_total"`
 			TimelineHasMore bool    `json:"timeline_has_more"`
+			Device          struct {
+				ID       string `json:"id"`
+				DeviceID string `json:"device_id"`
+			} `json:"device"`
 			TimelinePreview []struct {
 				Kind  string `json:"kind"`
 				Title string `json:"title"`
@@ -485,6 +496,9 @@ func TestAPIFlowIntegration(t *testing.T) {
 	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/events/"+eventID, token, nil, &eventDetail)
 	if status != http.StatusOK || eventDetail.Data.ID != eventID || eventDetail.Data.TimelineTotal != 2 || eventDetail.Data.TimelineHasMore || len(eventDetail.Data.TimelinePreview) != 2 {
 		t.Fatalf("event detail initial timeline status=%d body=%+v", status, eventDetail.Data)
+	}
+	if eventDetail.Data.Device.ID == "" || eventDetail.Data.Device.DeviceID != "TEST-001" {
+		t.Fatalf("event detail device = %+v", eventDetail.Data.Device)
 	}
 	if eventDetail.Data.TimelinePreview[0].Kind != string(domain.TimelineEventCreated) || eventDetail.Data.TimelinePreview[0].Actor.Type != string(domain.TimelineActorSystem) || eventDetail.Data.TimelinePreview[0].Actor.Name != "Sistem" {
 		t.Fatalf("event detail created timeline = %+v", eventDetail.Data.TimelinePreview[0])

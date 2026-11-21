@@ -207,6 +207,7 @@ func (e *RiskEngine) evaluateAndSync(ctx context.Context, device *domain.Device,
 				now := time.Now().UTC()
 				existing.Status = domain.EventResolved
 				existing.ResolvedAt = &now
+				existing.Device = device
 				_ = realtime.Publish(ctx, e.rdb, realtime.Envelope{
 					Type:     "event.resolved",
 					DeviceID: device.DeviceID,
@@ -300,6 +301,7 @@ func (e *RiskEngine) createEvent(ctx context.Context, device *domain.Device, eve
 	}
 
 	observability.RiskEvents.WithLabelValues(string(ev.EventType), string(ev.Severity)).Inc()
+	ev.Device = device
 	_ = realtime.Publish(ctx, e.rdb, realtime.Envelope{
 		Type:     "event.created",
 		DeviceID: device.DeviceID,
@@ -339,6 +341,7 @@ func (e *RiskEngine) ResolveDeviceEvent(ctx context.Context, device *domain.Devi
 	now := time.Now().UTC()
 	target.Status = domain.EventResolved
 	target.ResolvedAt = &now
+	target.Device = device
 	_ = realtime.Publish(ctx, e.rdb, realtime.Envelope{
 		Type:     "event.resolved",
 		DeviceID: device.DeviceID,

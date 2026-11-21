@@ -676,7 +676,7 @@ func (r *Repository) CreateEventTimeline(ctx context.Context, t *domain.EventTim
 
 func (r *Repository) GetEvent(ctx context.Context, id uuid.UUID) (*domain.Event, error) {
 	var ev domain.Event
-	if err := r.db.WithContext(ctx).First(&ev, "id = ?", id).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("Device").First(&ev, "id = ?", id).Error; err != nil {
 		return nil, normalizeErr(err)
 	}
 	return &ev, nil
@@ -779,7 +779,7 @@ func (r *Repository) ListEvents(ctx context.Context, f EventFilter) ([]domain.Ev
 		return nil, 0, err
 	}
 	var rows []domain.Event
-	err := build().Order("triggered_at DESC").Limit(f.Limit).Offset(f.Offset).Find(&rows).Error
+	err := build().Preload("Device").Order("triggered_at DESC").Limit(f.Limit).Offset(f.Offset).Find(&rows).Error
 	return rows, total, err
 }
 

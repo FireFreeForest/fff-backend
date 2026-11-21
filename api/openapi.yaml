@@ -1253,7 +1253,11 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        device_id: { type: string, format: uuid }
+        device_id:
+          type: string
+          format: uuid
+          description: "ID internal device (UUID); kode perangkat ada di device.device_id."
+        device: { $ref: "#/components/schemas/Device" }
         event_type:
           type: string
           enum:
