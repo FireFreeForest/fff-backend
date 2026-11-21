@@ -25,20 +25,30 @@ jobs:
           script: |
             set -e
 
+            export PATH="/usr/local/go/bin:/home/ubuntu/go/bin:/home/ubuntu/.bun/bin:/usr/local/bin:/usr/bin:/bin"
+            export HOME="/home/ubuntu"
+
             cd /home/ubuntu/fff/fff-backend
 
-            echo "Pulling latest changes..."
+            echo "=== Environment ==="
+            go version
+            pm2 --version
+
+            echo "=== Pulling changes ==="
             git pull origin main
 
-            echo "Building API..."
+            mkdir -p bin
+
+            echo "=== Building API ==="
             go build -trimpath -ldflags="-s -w" -o bin/api ./cmd/api
 
-            echo "Building Worker..."
+            echo "=== Building Worker ==="
             go build -trimpath -ldflags="-s -w" -o bin/worker ./cmd/worker
 
-            echo "Restarting PM2..."
+            echo "=== Restarting PM2 ==="
             pm2 restart ecosystem.config.cjs --update-env
 
+            echo "=== Saving PM2 ==="
             pm2 save
 
-            echo "Deployment completed successfully!"
+            echo "=== Deployment completed! ==="
