@@ -121,3 +121,15 @@ func TestLoadMCPDoesNotRequireJWT(t *testing.T) {
 		t.Fatal("Load should still require JWT_SECRET")
 	}
 }
+
+func TestLoadMigrateDoesNotRequireJWT(t *testing.T) {
+	setRequired(t)
+	t.Setenv("JWT_SECRET", "")
+	cfg, err := LoadMigrate()
+	if err != nil {
+		t.Fatalf("LoadMigrate: %v", err)
+	}
+	if cfg.DBDSN == "" {
+		t.Fatal("DBDSN should be set")
+	}
+}

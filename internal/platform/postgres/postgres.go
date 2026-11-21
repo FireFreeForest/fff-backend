@@ -53,30 +53,46 @@ func OpenWithLogger(dsn string, dbLogger gormlogger.Interface) (*gorm.DB, error)
 }
 
 func Migrate(dsn string) error {
+	_, _, err := MigrateWithVersion(dsn)
+	return err
+}
+
+// MigrateWithVersion applies all pending migrations and reports the resulting
+// schema version. A zero version with a nil error means no migration has been
+// recorded yet.
+func MigrateWithVersion(dsn string) (version uint, dirty bool, err error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return fmt.Errorf("open migration db: %w", err)
+		return 0, false, fmt.Errorf("open migration db: %w", err)
 	}
 	defer db.Close()
 
 	driver, err := pgxmigrate.WithInstance(db, &pgxmigrate.Config{})
 	if err != nil {
-		return fmt.Errorf("create migration driver: %w", err)
+		return 0, false, fmt.Errorf("create migration driver: %w", err)
 	}
 
 	src, err := iofs.New(migrations.FS, ".")
 	if err != nil {
-		return fmt.Errorf("create migration source: %w", err)
+		return 0, false, fmt.Errorf("create migration source: %w", err)
 	}
 
 	m, err := migrate.NewWithInstance("iofs", src, "pgx5", driver)
 	if err != nil {
-		return fmt.Errorf("create migrator: %w", err)
+		return 0, false, fmt.Errorf("create migrator: %w", err)
 	}
 	defer m.Close()
 
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("run migrations: %w", err)
+		return 0, false, fmt.Errorf("run migrations: %w", err)
 	}
-	return nil
+
+	version, dirty, err = m.Version()
+	if err != nil {
+		if errors.Is(err, migrate.ErrNilVersion) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("read migration version: %w", err)
+	}
+	return version, dirty, nil
 }

@@ -1,7 +1,7 @@
 GO ?= go
 COMPOSE ?= podman-compose
 
-.PHONY: build test vet tidy run-api run-worker run-mcp mcpkey run-sim up down logs ps provision mqtt-sync
+.PHONY: build test vet tidy migrate run-api run-worker run-mcp mcpkey run-sim up down logs ps provision mqtt-sync
 
 build:
 	$(GO) build ./...
@@ -14,6 +14,9 @@ vet:
 
 tidy:
 	GOSUMDB=off GOFLAGS=-mod=mod $(GO) mod tidy
+
+migrate:
+	@set -a; [ -f .env ] && . ./.env; set +a; $(GO) run ./cmd/migrate
 
 run-api:
 	@set -a; [ -f .env ] && . ./.env; set +a; $(GO) run ./cmd/api

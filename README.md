@@ -47,7 +47,13 @@ Layanan:
 | postgres | internal | PostgreSQL 16 |
 | redis | internal | Redis 7 |
 
-Migrasi database berjalan otomatis saat startup (`MIGRATE_ON_START=true`).
+Migrasi database dijalankan sebagai langkah terpisah oleh service satu kali `migrate` sebelum `api` dan `worker` start. Service aplikasi memakai `MIGRATE_ON_START=false` agar tidak ada DDL saat worker sudah berjalan. Untuk menjalankan migrasi manual:
+
+```bash
+make migrate          # memuat .env lalu go run ./cmd/migrate
+go run ./cmd/migrate  # tanpa Makefile
+./bin/migrate         # binary hasil build
+```
 
 Cek kesehatan:
 
@@ -73,6 +79,7 @@ Prasyarat: Go 1.26+, PostgreSQL 16+, Redis 7+, Mosquitto 2+.
 ```bash
 cp .env.example .env
 # sesuaikan DB_DSN, REDIS_ADDR, MQTT_BROKER
+make migrate      # terapkan migrasi dulu
 make run-api      # terminal 1
 make run-worker   # terminal 2
 make run-sim      # terminal 3 (simulator dengan flame aktif)
@@ -81,7 +88,10 @@ make run-sim      # terminal 3 (simulator dengan flame aktif)
 Atau jalankan binary hasil build:
 
 ```bash
-make build
+go build -o migrate ./cmd/migrate
+go build -o api ./cmd/api
+go build -o worker ./cmd/worker
+./migrate
 ./api
 ./worker
 ```

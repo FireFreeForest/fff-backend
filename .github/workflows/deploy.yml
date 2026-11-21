@@ -45,8 +45,30 @@ jobs:
             echo "=== Building Worker ==="
             go build -trimpath -ldflags="-s -w" -o bin/worker ./cmd/worker
 
-            echo "=== Restarting PM2 ==="
-            pm2 restart ecosystem.config.cjs --update-env
+            echo "=== Building Migrate ==="
+            go build -trimpath -ldflags="-s -w" -o bin/migrate ./cmd/migrate
+
+            echo "=== Stopping services ==="
+            pm2 stop ecosystem.config.cjs || true
+
+            echo "=== Running migrations ==="
+            set +e
+            if [ -f .env ]; then
+              ( set -a; . ./.env; set +a; ./bin/migrate )
+            else
+              ./bin/migrate
+            fi
+            migrate_status=$?
+            set -e
+
+            if [ "$migrate_status" -ne 0 ]; then
+              echo "ERROR: database migration failed; restarting services" >&2
+              pm2 start ecosystem.config.cjs --update-env || true
+              exit "$migrate_status"
+            fi
+
+            echo "=== Starting PM2 ==="
+            pm2 start ecosystem.config.cjs --update-env
 
             echo "=== Saving PM2 ==="
             pm2 save

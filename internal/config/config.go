@@ -84,6 +84,10 @@ func Load() (*Config, error) { return load(true) }
 // HTTP users.
 func LoadMCP() (*Config, error) { return load(false) }
 
+// LoadMigrate loads configuration for the standalone migration binary. It only
+// needs the database DSN, so JWT_SECRET is not required.
+func LoadMigrate() (*Config, error) { return load(false) }
+
 func load(requireJWT bool) (*Config, error) {
 	cfg := &Config{
 		Env:      env("APP_ENV", "development"),

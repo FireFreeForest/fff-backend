@@ -31,6 +31,7 @@ x-app-env: &app-env
   TELEMETRY_RETENTION_DAYS: "${TELEMETRY_RETENTION_DAYS:-90}"
   MCP_ENABLED: "${MCP_ENABLED:-false}"
   MCP_RATE_LIMIT_PER_MIN: "${MCP_RATE_LIMIT_PER_MIN:-120}"
+  MIGRATE_ON_START: "false"
 
 services:
   postgres:
@@ -59,6 +60,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+
+  migrate:
+    image: fire-free-forest-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["/app/migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
 
   mosquitto-init:
     image: eclipse-mosquitto:2
@@ -107,6 +121,8 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
     ports:
@@ -128,6 +144,8 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       MQTT_CLIENT_ID: fff-worker-1
