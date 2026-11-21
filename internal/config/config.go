@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"firefreeforest/backend/internal/domain"
 )
 
@@ -67,9 +69,22 @@ type Config struct {
 	FCMProjectID       string
 	FCMMinSeverity     string
 	FCMEventTypes      []string
+
+	MCPEnabled         bool
+	MCPRateLimitPerMin int
+	MCPRole            domain.UserRole
+	MCPActorID         string
+	MCPAPIKey          string
 }
 
-func Load() (*Config, error) {
+func Load() (*Config, error) { return load(true) }
+
+// LoadMCP loads configuration for the stdio MCP binary. Unlike Load, it does
+// not require JWT_SECRET because the stdio transport does not authenticate
+// HTTP users.
+func LoadMCP() (*Config, error) { return load(false) }
+
+func load(requireJWT bool) (*Config, error) {
 	cfg := &Config{
 		Env:      env("APP_ENV", "development"),
 		HTTPAddr: env("HTTP_ADDR", ":8080"),
@@ -130,16 +145,24 @@ func Load() (*Config, error) {
 			"FCM_EVENT_TYPES",
 			"FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR",
 		),
+
+		MCPEnabled:         envBool("MCP_ENABLED", false),
+		MCPRateLimitPerMin: envInt("MCP_RATE_LIMIT_PER_MIN", 120),
+		MCPRole:            domain.UserRole(strings.ToLower(env("MCP_ROLE", string(domain.RoleViewer)))),
+		MCPActorID:         env("MCP_ACTOR_ID", ""),
+		MCPAPIKey:          env("MCP_API_KEY", ""),
 	}
 
 	if cfg.DBDSN == "" {
 		return nil, fmt.Errorf("DB_DSN is required")
 	}
-	if cfg.JWTSecret == "" {
-		return nil, fmt.Errorf("JWT_SECRET is required")
-	}
-	if len(cfg.JWTSecret) < 24 {
-		return nil, fmt.Errorf("JWT_SECRET must be at least 24 characters")
+	if requireJWT {
+		if cfg.JWTSecret == "" {
+			return nil, fmt.Errorf("JWT_SECRET is required")
+		}
+		if len(cfg.JWTSecret) < 24 {
+			return nil, fmt.Errorf("JWT_SECRET must be at least 24 characters")
+		}
 	}
 	if cfg.MQTTQoS < 0 || cfg.MQTTQoS > 2 {
 		return nil, fmt.Errorf("MQTT_QOS must be 0, 1, or 2")
@@ -174,6 +197,18 @@ func Load() (*Config, error) {
 		normalizedEvents = append(normalizedEvents, string(eventType))
 	}
 	cfg.FCMEventTypes = normalizedEvents
+
+	if !domain.ValidRole(cfg.MCPRole) {
+		return nil, fmt.Errorf("MCP_ROLE must be admin, petugas, or viewer")
+	}
+	if cfg.MCPRateLimitPerMin < 0 {
+		return nil, fmt.Errorf("MCP_RATE_LIMIT_PER_MIN must be zero or greater")
+	}
+	if cfg.MCPActorID != "" {
+		if _, err := uuid.Parse(cfg.MCPActorID); err != nil {
+			return nil, fmt.Errorf("MCP_ACTOR_ID must be a valid UUID")
+		}
+	}
 
 	return cfg, nil
 }

@@ -18,8 +18,17 @@ import (
 )
 
 func Open(dsn string) (*gorm.DB, error) {
+	return OpenWithLogger(dsn, gormlogger.Default.LogMode(gormlogger.Warn))
+}
+
+// OpenWithLogger lets callers choose the GORM logger. The stdio MCP and key
+// management binaries pass a silent logger so stdout remains clean.
+func OpenWithLogger(dsn string, dbLogger gormlogger.Interface) (*gorm.DB, error) {
+	if dbLogger == nil {
+		dbLogger = gormlogger.Default.LogMode(gormlogger.Silent)
+	}
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger:         gormlogger.Default.LogMode(gormlogger.Warn),
+		Logger:         dbLogger,
 		TranslateError: true,
 	})
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"firefreeforest/backend/internal/domain"
 	"firefreeforest/backend/internal/repository"
 	"firefreeforest/backend/internal/service"
+	mcptransport "firefreeforest/backend/internal/transport/mcp"
 	"firefreeforest/backend/internal/transport/ws"
 )
 
@@ -23,6 +24,7 @@ type Deps struct {
 	Auth     *service.AuthService
 	Commands *service.CommandService
 	Geocoder *service.Geocoder
+	Keys     *service.MCPKeyService
 	Hub      *ws.Hub
 	Redis    *goredis.Client
 	Logger   *slog.Logger
@@ -34,6 +36,7 @@ type Handler struct {
 	auth     *service.AuthService
 	commands *service.CommandService
 	geocoder *service.Geocoder
+	keys     *service.MCPKeyService
 	hub      *ws.Hub
 	rdb      *goredis.Client
 	log      *slog.Logger
@@ -49,6 +52,7 @@ func NewRouter(d Deps) *gin.Engine {
 		auth:     d.Auth,
 		commands: d.Commands,
 		geocoder: d.Geocoder,
+		keys:     d.Keys,
 		hub:      d.Hub,
 		rdb:      d.Redis,
 		log:      d.Logger,
@@ -61,6 +65,19 @@ func NewRouter(d Deps) *gin.Engine {
 	r.GET("/readyz", h.ready)
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	registerDocsRoutes(r)
+
+	if d.Config.MCPEnabled {
+		mcpHandler := mcptransport.NewHTTPHandler(mcptransport.Deps{
+			Config:   d.Config,
+			Repo:     d.Repo,
+			Commands: d.Commands,
+			Geocoder: d.Geocoder,
+			Keys:     d.Keys,
+			Redis:    d.Redis,
+			Logger:   d.Logger,
+		}, d.Config.MCPRateLimitPerMin)
+		r.Any("/mcp", gin.WrapH(mcpHandler))
+	}
 
 	v1 := r.Group("/api/v1")
 	v1.POST("/auth/login", loginRateLimit(d.Redis, d.Config.LoginRatePerMin), h.login)
@@ -108,6 +125,10 @@ func NewRouter(d Deps) *gin.Engine {
 	admin.GET("/users", h.listUsers)
 	admin.POST("/users", h.createUser)
 	admin.PATCH("/users/:userID", h.updateUser)
+	admin.GET("/mcp-keys", h.listMCPKeys)
+	admin.POST("/mcp-keys", h.createMCPKey)
+	admin.PATCH("/mcp-keys/:keyID", h.updateMCPKey)
+	admin.POST("/mcp-keys/:keyID/rotate", h.rotateMCPKey)
 
 	return r
 }

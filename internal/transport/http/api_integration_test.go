@@ -42,6 +42,8 @@ func TestAPIFlowIntegration(t *testing.T) {
 	t.Setenv("SEED_ADMIN_EMAIL", "admin@fff.local")
 	t.Setenv("SEED_ADMIN_PASSWORD", "admin12345")
 	t.Setenv("SEED_DEVICE_ID", "")
+	t.Setenv("MCP_ENABLED", "true")
+	t.Setenv("MCP_RATE_LIMIT_PER_MIN", "1000")
 
 	if err := postgres.Migrate(dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -51,7 +53,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("open postgres: %v", err)
 	}
 	if err := db.Exec(`TRUNCATE event_timeline, audit_logs, outbox, commands, events, telemetry_fire,
-		telemetry_environment, devices, refresh_tokens, push_tokens, users RESTART IDENTITY CASCADE`).Error; err != nil {
+		telemetry_environment, devices, refresh_tokens, push_tokens, mcp_api_keys, users RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -82,6 +84,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 		Repo:     repo,
 		Auth:     auth,
 		Commands: commands,
+		Keys:     service.NewMCPKeyService(repo),
 		Hub:      hub,
 		Redis:    rdb,
 		Logger:   log,
@@ -103,12 +106,17 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}
 	token := login.Data.Tokens.AccessToken
 
+	var petugasUser struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
 	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/users", token, map[string]any{
 		"email": "petugas@fff.local", "password": "petugas12345",
 		"name": "Petugas Integration", "role": "petugas",
-	}, nil)
-	if status != http.StatusCreated {
-		t.Fatalf("create petugas status=%d", status)
+	}, &petugasUser)
+	if status != http.StatusCreated || petugasUser.Data.ID == "" {
+		t.Fatalf("create petugas status=%d body=%+v", status, petugasUser)
 	}
 
 	var petugasLogin struct {
@@ -608,6 +616,246 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("dashboard status=%d devices=%d active=%d", status, dashboard.Data.Devices.Total, dashboard.Data.ActiveEvents.Total)
 	}
 
+	// ---------------------------------------------------------------- MCP
+	var petugasKey struct {
+		Data struct {
+			ID        string `json:"id"`
+			KeyPrefix string `json:"key_prefix"`
+			Role      string `json:"role"`
+			Token     string `json:"token"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys", token, map[string]any{
+		"name": "integration petugas", "role": "petugas", "actor_id": petugasUser.Data.ID,
+	}, &petugasKey)
+	if status != http.StatusCreated || petugasKey.Data.ID == "" || petugasKey.Data.Role != "petugas" || !strings.HasPrefix(petugasKey.Data.Token, "mcp_") {
+		t.Fatalf("create petugas mcp key status=%d body=%+v", status, petugasKey)
+	}
+
+	var viewerKey struct {
+		Data struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys", token, map[string]any{
+		"name": "integration viewer", "role": "viewer",
+	}, &viewerKey)
+	if status != http.StatusCreated || viewerKey.Data.Token == "" {
+		t.Fatalf("create viewer mcp key status=%d body=%+v", status, viewerKey)
+	}
+
+	var adminKey struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys", token, map[string]any{
+		"name": "integration admin", "role": "admin",
+	}, &adminKey)
+	if status != http.StatusCreated || adminKey.Data.Token == "" {
+		t.Fatalf("create admin mcp key status=%d body=%+v", status, adminKey)
+	}
+
+	var keyList struct {
+		Data []struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		} `json:"data"`
+		Meta struct {
+			Total int64 `json:"total"`
+		} `json:"meta"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/mcp-keys", token, nil, &keyList)
+	if status != http.StatusOK || keyList.Meta.Total != 3 || len(keyList.Data) != 3 {
+		t.Fatalf("list mcp keys status=%d body=%+v", status, keyList)
+	}
+	for _, key := range keyList.Data {
+		if key.Token != "" {
+			t.Fatal("list mcp keys must not expose tokens")
+		}
+	}
+
+	if status, _ := doMCP(t, srv.URL, "", 1, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
+		t.Fatalf("mcp without token status=%d", status)
+	}
+	if status, _ := doMCP(t, srv.URL, "mcp_000000000000_invalid", 1, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
+		t.Fatalf("mcp invalid token status=%d", status)
+	}
+
+	status, initResp := doMCP(t, srv.URL, viewerKey.Data.Token, 1, "initialize", mcpInitializeParams())
+	if status != http.StatusOK || initResp.Error != nil {
+		t.Fatalf("mcp initialize status=%d error=%+v", status, initResp.Error)
+	}
+	var initResult struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name string `json:"name"`
+		} `json:"serverInfo"`
+	}
+	if err := json.Unmarshal(initResp.Result, &initResult); err != nil || initResult.ProtocolVersion == "" || initResult.ServerInfo.Name != "fire-free-forest" {
+		t.Fatalf("mcp initialize result=%s err=%v", initResp.Result, err)
+	}
+
+	viewerTools := mcpToolNames(t, srv.URL, viewerKey.Data.Token)
+	if !viewerTools["list_devices"] || !viewerTools["get_dashboard_summary"] {
+		t.Fatalf("viewer tools = %+v", viewerTools)
+	}
+	if viewerTools["issue_pump_command"] || viewerTools["acknowledge_event"] || viewerTools["resolve_event"] {
+		t.Fatalf("viewer must not see operational tools: %+v", viewerTools)
+	}
+
+	petugasTools := mcpToolNames(t, srv.URL, petugasKey.Data.Token)
+	if !petugasTools["issue_pump_command"] || !petugasTools["acknowledge_event"] || !petugasTools["resolve_event"] {
+		t.Fatalf("petugas tools = %+v", petugasTools)
+	}
+
+	adminTools := mcpToolNames(t, srv.URL, adminKey.Data.Token)
+	if !adminTools["issue_pump_command"] || !adminTools["acknowledge_event"] {
+		t.Fatalf("admin tools = %+v", adminTools)
+	}
+	if adminTools["resolve_event"] {
+		t.Fatalf("admin must not see resolve_event: %+v", adminTools)
+	}
+
+	status, dashboardCall := doMCP(t, srv.URL, viewerKey.Data.Token, 2, "tools/call", map[string]any{
+		"name": "get_dashboard_summary", "arguments": map[string]any{},
+	})
+	if status != http.StatusOK || dashboardCall.Error != nil {
+		t.Fatalf("mcp dashboard status=%d error=%+v", status, dashboardCall.Error)
+	}
+	var dashboardContent struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(dashboardCall.Result, &dashboardContent); err != nil || dashboardContent.IsError || len(dashboardContent.Content) != 1 {
+		t.Fatalf("mcp dashboard result=%s err=%v", dashboardCall.Result, err)
+	}
+	var mcpDashboard struct {
+		Devices struct {
+			Total int `json:"total"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal([]byte(dashboardContent.Content[0].Text), &mcpDashboard); err != nil || mcpDashboard.Devices.Total != 2 {
+		t.Fatalf("mcp dashboard data=%s err=%v", dashboardContent.Content[0].Text, err)
+	}
+
+	issueArgs := map[string]any{
+		"device_id": "TEST-001", "state": true, "duration": 30, "idempotency_key": "mcp-int-1",
+	}
+	status, issueCall := doMCP(t, srv.URL, petugasKey.Data.Token, 3, "tools/call", map[string]any{
+		"name": "issue_pump_command", "arguments": issueArgs,
+	})
+	if status != http.StatusOK || issueCall.Error != nil {
+		t.Fatalf("mcp issue pump status=%d error=%+v", status, issueCall.Error)
+	}
+	issuedMCP := decodeMCPToolContent(t, issueCall.Result)
+	var mcpCommand struct {
+		CommandID string `json:"command_id"`
+		Origin    string `json:"origin"`
+		Status    string `json:"status"`
+	}
+	if err := json.Unmarshal(issuedMCP, &mcpCommand); err != nil || mcpCommand.CommandID == "" || mcpCommand.Origin != string(domain.OriginMCP) {
+		t.Fatalf("mcp command = %s err=%v", issuedMCP, err)
+	}
+	status, repeatedCall := doMCP(t, srv.URL, petugasKey.Data.Token, 4, "tools/call", map[string]any{
+		"name": "issue_pump_command", "arguments": issueArgs,
+	})
+	if status != http.StatusOK || repeatedCall.Error != nil {
+		t.Fatalf("mcp repeated pump status=%d error=%+v", status, repeatedCall.Error)
+	}
+	var repeatedCommand struct {
+		CommandID string `json:"command_id"`
+	}
+	if err := json.Unmarshal(decodeMCPToolContent(t, repeatedCall.Result), &repeatedCommand); err != nil || repeatedCommand.CommandID != mcpCommand.CommandID {
+		t.Fatalf("idempotent command = %q, want %q (err=%v)", repeatedCommand.CommandID, mcpCommand.CommandID, err)
+	}
+	storedCommand, err := repo.GetCommandByCommandID(context.Background(), mcpCommand.CommandID)
+	if err != nil || storedCommand.Origin != domain.OriginMCP || storedCommand.IssuedBy == nil || storedCommand.IssuedBy.String() != petugasUser.Data.ID {
+		t.Fatalf("stored mcp command = %+v err=%v", storedCommand, err)
+	}
+
+	mcpEvent, err := risk.EmitDeviceEvent(context.Background(), device, domain.EventSmokeDetected, "mcp integration", "Smoke detected during MCP test")
+	if err != nil || mcpEvent == nil {
+		t.Fatalf("emit mcp event event=%+v err=%v", mcpEvent, err)
+	}
+	status, ackCall := doMCP(t, srv.URL, petugasKey.Data.Token, 5, "tools/call", map[string]any{
+		"name": "acknowledge_event", "arguments": map[string]any{"event_id": mcpEvent.ID.String()},
+	})
+	if status != http.StatusOK || ackCall.Error != nil {
+		t.Fatalf("mcp ack status=%d error=%+v", status, ackCall.Error)
+	}
+	var ackEvent struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(decodeMCPToolContent(t, ackCall.Result), &ackEvent); err != nil || ackEvent.Status != string(domain.EventAcknowledged) {
+		t.Fatalf("mcp ack event = %+v err=%v", ackEvent, err)
+	}
+
+	status, resolveCall := doMCP(t, srv.URL, adminKey.Data.Token, 6, "tools/call", map[string]any{
+		"name": "resolve_event", "arguments": map[string]any{"event_id": mcpEvent.ID.String()},
+	})
+	if status == http.StatusOK && resolveCall.Error == nil {
+		t.Fatal("admin must not be able to resolve events through MCP")
+	}
+
+	status, resolveCall = doMCP(t, srv.URL, petugasKey.Data.Token, 7, "tools/call", map[string]any{
+		"name": "resolve_event", "arguments": map[string]any{"event_id": mcpEvent.ID.String()},
+	})
+	if status != http.StatusOK || resolveCall.Error != nil {
+		t.Fatalf("mcp resolve status=%d error=%+v", status, resolveCall.Error)
+	}
+	var resolvedEvent struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(decodeMCPToolContent(t, resolveCall.Result), &resolvedEvent); err != nil || resolvedEvent.Status != string(domain.EventResolved) {
+		t.Fatalf("mcp resolved event = %+v err=%v", resolvedEvent, err)
+	}
+
+	var rotated struct {
+		Data struct {
+			Key struct {
+				ID    string `json:"id"`
+				Token string `json:"token"`
+			} `json:"key"`
+			Previous struct {
+				ID       string `json:"id"`
+				IsActive bool   `json:"is_active"`
+			} `json:"previous"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys/"+petugasKey.Data.ID+"/rotate", token, map[string]any{
+		"grace_seconds": 0,
+	}, &rotated)
+	if status != http.StatusOK || rotated.Data.Key.ID == "" || rotated.Data.Key.Token == "" || rotated.Data.Previous.ID != petugasKey.Data.ID || rotated.Data.Previous.IsActive {
+		t.Fatalf("rotate mcp key status=%d body=%+v", status, rotated)
+	}
+	if status, _ := doMCP(t, srv.URL, petugasKey.Data.Token, 8, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
+		t.Fatalf("rotated old key status=%d, want 401", status)
+	}
+	if status, resp := doMCP(t, srv.URL, rotated.Data.Key.Token, 8, "initialize", mcpInitializeParams()); status != http.StatusOK || resp.Error != nil {
+		t.Fatalf("rotated new key status=%d error=%+v", status, resp.Error)
+	}
+
+	status = doJSON(t, http.MethodPatch, srv.URL+"/api/v1/admin/mcp-keys/"+rotated.Data.Key.ID, token, map[string]any{
+		"role": "viewer",
+	}, nil)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("mcp key role mismatch status=%d, want 422", status)
+	}
+	status = doJSON(t, http.MethodPatch, srv.URL+"/api/v1/admin/mcp-keys/"+rotated.Data.Key.ID, token, map[string]any{
+		"is_active": false,
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("deactivate mcp key status=%d", status)
+	}
+	if status, _ := doMCP(t, srv.URL, rotated.Data.Key.Token, 9, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
+		t.Fatalf("deactivated key status=%d, want 401", status)
+	}
+
 	var ticket struct {
 		Data struct {
 			Ticket string `json:"ticket"`
@@ -638,6 +886,101 @@ func TestAPIFlowIntegration(t *testing.T) {
 func floatPtr(v float64) *float64 { return &v }
 
 func intPtr(v int) *int { return &v }
+
+func mcpInitializeParams() map[string]any {
+	return map[string]any{
+		"protocolVersion": "2025-11-25",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "integration-test", "version": "1.0.0"},
+	}
+}
+
+type mcpRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func doMCP(t *testing.T, baseURL, token string, id int, method string, params any) (int, mcpRPCResponse) {
+	t.Helper()
+	payload := map[string]any{"jsonrpc": "2.0", "id": id, "method": method}
+	if params != nil {
+		payload["params"] = params
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal mcp payload: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/mcp", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("new mcp request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("mcp request %s: %v", method, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var out mcpRPCResponse
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("decode mcp %s status=%d: %v body=%s", method, resp.StatusCode, err, body)
+		}
+	}
+	if resp.StatusCode >= 500 {
+		t.Logf("mcp server error body: %s", body)
+	}
+	return resp.StatusCode, out
+}
+
+func mcpToolNames(t *testing.T, baseURL, token string) map[string]bool {
+	t.Helper()
+	status, resp := doMCP(t, baseURL, token, 100, "tools/list", map[string]any{})
+	if status != http.StatusOK || resp.Error != nil {
+		t.Fatalf("mcp tools/list status=%d error=%+v", status, resp.Error)
+	}
+	var result struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("decode mcp tools: %v", err)
+	}
+	names := make(map[string]bool, len(result.Tools))
+	for _, tool := range result.Tools {
+		names[tool.Name] = true
+	}
+	return names
+}
+
+func decodeMCPToolContent(t *testing.T, raw json.RawMessage) []byte {
+	t.Helper()
+	var result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decode mcp tool result: %v", err)
+	}
+	if result.IsError || len(result.Content) != 1 {
+		t.Fatalf("mcp tool failed: error=%t content=%d raw=%s", result.IsError, len(result.Content), raw)
+	}
+	return []byte(result.Content[0].Text)
+}
 
 func doJSON(t *testing.T, method, url, token string, body, out any) int {
 	t.Helper()

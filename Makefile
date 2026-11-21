@@ -1,7 +1,7 @@
 GO ?= go
 COMPOSE ?= podman-compose
 
-.PHONY: build test vet tidy run-api run-worker run-sim up down logs ps provision mqtt-sync
+.PHONY: build test vet tidy run-api run-worker run-mcp mcpkey run-sim up down logs ps provision mqtt-sync
 
 build:
 	$(GO) build ./...
@@ -20,6 +20,12 @@ run-api:
 
 run-worker:
 	@set -a; [ -f .env ] && . ./.env; set +a; $(GO) run ./cmd/worker
+
+run-mcp:
+	@set -a; [ -f .env ] && . ./.env; set +a; $(GO) run ./cmd/mcp
+
+mcpkey:
+	@set -a; [ -f .env ] && . ./.env; set +a; $(GO) run ./cmd/mcpkey $(ARGS)
 
 SIM_ARGS ?= -fire
 

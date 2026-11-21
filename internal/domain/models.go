@@ -109,6 +109,7 @@ type CommandOrigin string
 const (
 	OriginManual CommandOrigin = "manual"
 	OriginSystem CommandOrigin = "system"
+	OriginMCP    CommandOrigin = "mcp"
 )
 
 type User struct {
@@ -287,3 +288,21 @@ type AuditLog struct {
 	IP        string          `json:"ip"`
 	CreatedAt time.Time       `json:"created_at"`
 }
+
+// MCPAPIKey is a database-backed credential for the MCP transports. Only the
+// SHA-256 hash of the secret is stored; the raw token is shown once on create.
+type MCPAPIKey struct {
+	ID         uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	Name       string     `gorm:"not null" json:"name"`
+	KeyPrefix  string     `gorm:"not null" json:"key_prefix"`
+	KeyHash    []byte     `gorm:"not null" json:"-"`
+	Role       UserRole   `gorm:"type:text;not null" json:"role"`
+	ActorID    *uuid.UUID `gorm:"type:uuid" json:"actor_id,omitempty"`
+	IsActive   bool       `gorm:"not null" json:"is_active"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+func (MCPAPIKey) TableName() string { return "mcp_api_keys" }

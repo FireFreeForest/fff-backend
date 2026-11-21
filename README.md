@@ -155,6 +155,10 @@ Semua endpoint di bawah prefix `/api/v1`.
 | GET | `/users` | admin | Daftar user; `q` mencari nama/email |
 | POST | `/users` | admin | Tambah user |
 | PATCH | `/users/:userID` | admin | Ubah user |
+| GET | `/admin/mcp-keys` | admin | Daftar MCP API key |
+| POST | `/admin/mcp-keys` | admin | Buat MCP API key (token hanya ditampilkan sekali) |
+| PATCH | `/admin/mcp-keys/:keyID` | admin | Ubah nama, role, actor, expiry, atau status key |
+| POST | `/admin/mcp-keys/:keyID/rotate` | admin | Rotasi key dengan masa tenggang opsional |
 | GET | `/devices` | semua | Daftar device; `q` mencari nama/lokasi/device ID |
 | POST | `/devices` | admin | Tambah device; `device_id` opsional dan dibuat otomatis bila kosong |
 | GET | `/devices/:deviceID` | semua | Detail device |
@@ -231,6 +235,99 @@ curl -X POST http://localhost:8080/api/v1/devices/FFF-VIRTUAL-DEVICE/commands \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: pump-001' \
   -d '{"action":"SET_PUMP","payload":{"state":true,"duration":30}}'
+```
+
+## MCP (Model Context Protocol)
+
+Backend menyediakan MCP untuk agen AI melalui dua transport:
+
+| Transport | Cara akses | Autentikasi |
+| --- | --- | --- |
+| Streamable HTTP | `POST /mcp` | `Authorization: Bearer mcp_...` |
+| stdio | binary `./mcp` | `MCP_API_KEY`, atau fallback `MCP_ROLE` + `MCP_ACTOR_ID` |
+
+HTTP MCP nonaktif secara default. Set `MCP_ENABLED=true` setelah membuat minimal satu API key. Endpoint HTTP memakai mode stateless dan mengembalikan JSON, sehingga cocok di belakang reverse proxy/Caddy yang sudah meneruskan seluruh trafik ke `api:8080`.
+
+### Mengelola API key
+
+Key disimpan di tabel `mcp_api_keys`. Database hanya menyimpan hash SHA-256 dari secret; token lengkap ditampilkan sekali saat create/rotate. Format token: `mcp_<12 hex prefix>_<43 karakter base64url>`.
+
+Lewat CLI:
+
+```bash
+go run ./cmd/mcpkey create --name "agen-lapangan" --role petugas --actor-id <user-uuid>
+go run ./cmd/mcpkey list
+go run ./cmd/mcpkey show --id <key-uuid>
+go run ./cmd/mcpkey rotate --id <key-uuid> --grace 1h
+go run ./cmd/mcpkey revoke --id <key-uuid>
+```
+
+Lewat REST (admin):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/mcp-keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"agen-lapangan","role":"petugas","actor_id":"<user-uuid>","expires_at":"2027-01-01T00:00:00Z"}'
+```
+
+`actor_id` wajib untuk key yang akan memakai tool operasional (acknowledge/resolve/issue pump). Aksi dicatat atas nama user tersebut, dan role key harus sama dengan role user. Key tanpa `actor_id` tetap bisa dipakai untuk semua tool baca.
+
+### Tool
+
+Tool baca tersedia untuk semua role:
+
+- `list_devices`, `get_device`, `get_device_status`, `get_latest_telemetry`
+- `list_environment_telemetry`, `aggregate_environment_telemetry`
+- `list_fire_telemetry`, `aggregate_fire_telemetry`
+- `list_events`, `get_event`, `list_event_timeline`
+- `list_commands`, `get_command`
+- `get_dashboard_summary`, `reverse_geocode`
+
+Tool operasional:
+
+| Tool | Role | Keterangan |
+| --- | --- | --- |
+| `acknowledge_event` | admin, petugas | Event harus berstatus `active` |
+| `issue_pump_command` | admin, petugas | `SET_PUMP`; origin command `mcp`; mendukung `idempotency_key` |
+| `resolve_event` | petugas | Sama seperti REST, resolve bukan wewenang admin |
+
+Command yang dikirim lewat MCP tercatat dengan `origin=mcp`, `issued_by` dari `actor_id`, dan audit metadata berisi `via=mcp`, `key_id`, serta `key_name`.
+
+### Resources dan prompts
+
+Resource JSON:
+
+- `firefreeforest://devices`
+- `firefreeforest://events/active`
+- `firefreeforest://dashboard/summary`
+- `firefreeforest://devices/{device_id}/latest` (template)
+
+Prompt: `triage_events`, `device_health`, `shift_briefing`, dan `pump_command_checklist` (khusus admin/petugas).
+
+### Menjalankan stdio
+
+```bash
+MCP_API_KEY=mcp_... go run ./cmd/mcp
+# atau tanpa key, memakai identitas eksplisit:
+MCP_ROLE=viewer go run ./cmd/mcp
+```
+
+Binary stdio memakai `DB_DSN` dan `REDIS_ADDR` yang sama dengan API, menulis log ke stderr, dan tidak membutuhkan `JWT_SECRET`. Contoh konfigurasi klien desktop:
+
+```json
+{
+  "mcpServers": {
+    "fire-free-forest": {
+      "command": "/app/mcp",
+      "env": {
+        "DB_DSN": "host=... user=... password=... dbname=fff",
+        "REDIS_ADDR": "redis:6379",
+        "MCP_API_KEY": "mcp_..."
+      }
+    }
+  }
+}
 ```
 
 ## WebSocket
@@ -389,7 +486,9 @@ Lihat `.env.example`. Variabel wajib:
 - `DB_DSN`
 - `JWT_SECRET` minimal 24 karakter
 
-Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`.
+Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`, `MCP_ENABLED`, `MCP_RATE_LIMIT_PER_MIN`.
+
+Untuk MCP: `MCP_ENABLED` (default `false`) mengaktifkan endpoint `/mcp`; `MCP_RATE_LIMIT_PER_MIN` membatasi request per key per menit (default `120`, `0` menonaktifkan). Binary stdio memakai `MCP_API_KEY`, atau fallback `MCP_ROLE` dan `MCP_ACTOR_ID`.
 
 `MQTT_DEVICE_USERNAME` dan `MQTT_DEVICE_PASSWORD` wajib diisi saat memakai Docker Compose; nilainya dipakai semua device dan website virtual device. Gunakan username acak serta password panjang, bukan default contoh.
 
@@ -489,6 +588,8 @@ TEST_DB_DSN='host=localhost user=fff password=fff dbname=fff_test port=5432 sslm
 backend/
   cmd/api/            entrypoint REST API
   cmd/worker/         entrypoint worker MQTT
+  cmd/mcp/            entrypoint MCP stdio
+  cmd/mcpkey/         CLI pengelolaan MCP API key
   cmd/simulator/      simulator perangkat
   internal/config/    konfigurasi env
   internal/domain/    model dan enum
@@ -496,7 +597,7 @@ backend/
   internal/repository query database
   internal/service/   auth, command, risk engine, notifier
   internal/worker/    consumer, outbox, sweeper
-  internal/transport/ HTTP handler + WebSocket hub
+  internal/transport/ HTTP handler, MCP server, WebSocket hub
   migrations/         migrasi SQL
   deploy/mosquitto/   konfigurasi broker dan provisioning
   scripts/            sinkronisasi akun MQTT bersama
@@ -549,4 +650,6 @@ Gunakan `--dart-define=ALLOW_SERVER_SWITCH=true` hanya untuk build internal yang
 - Gunakan TLS di reverse proxy untuk API dan WebSocket.
 - Batasi akses port MQTT atau gunakan TLS listener.
 - Simpan service account FCM sebagai secret, jangan commit ke repository.
+- Perlakukan token `mcp_...` seperti password. Simpan hanya di secret manager/konfigurasi klien, rotasi berkala, dan cabut key yang tidak dipakai.
+- Aktifkan MCP hanya bila diperlukan (`MCP_ENABLED=true`) dan batasi `MCP_RATE_LIMIT_PER_MIN` sesuai beban.
 - Backup volume PostgreSQL secara berkala.

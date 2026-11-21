@@ -46,4 +46,20 @@ var (
 		Name: "fff_notifications_total",
 		Help: "Push notification send results.",
 	}, []string{"result"})
+
+	MCPToolCalls = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "fff_mcp_tool_calls_total",
+		Help: "Total MCP tool calls by tool, role, and status.",
+	}, []string{"tool", "role", "status"})
+
+	MCPToolDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "fff_mcp_tool_duration_seconds",
+		Help:    "MCP tool call duration.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"tool", "role"})
+
+	MCPAuthFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "fff_mcp_auth_failures_total",
+		Help: "MCP authentication and rate limit failures.",
+	}, []string{"reason"})
 )
