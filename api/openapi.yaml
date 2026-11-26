@@ -1280,7 +1280,7 @@ components:
         soil_moisture:
           type: number
           minimum: 0
-          maximum: 1023
+          maximum: 1024
           description: "Nilai mentah ADC sensor tanah."
         recorded_at: { type: string, format: date-time }
         received_at: { type: string, format: date-time }
@@ -1300,12 +1300,12 @@ components:
           type: integer
           nullable: true
           minimum: 0
-          maximum: 1023
+          maximum: 1024
           description: "Nilai mentah ADC sensor api; opsional."
         smoke_level:
           type: integer
           minimum: 0
-          maximum: 1023
+          maximum: 1024
           description: "Nilai mentah ADC sensor MQ-2."
         pump: { type: boolean }
         buzzer: { type: boolean }
@@ -1368,7 +1368,7 @@ components:
         soil_moisture:
           type: number
           minimum: 0
-          maximum: 1023
+          maximum: 1024
           description: "Rata-rata ADC mentah sensor tanah."
         sample_count: { type: integer, format: int64 }
 
@@ -1417,12 +1417,12 @@ components:
           type: number
           nullable: true
           minimum: 0
-          maximum: 1023
+          maximum: 1024
           description: "Rata-rata ADC mentah sensor api."
         smoke_level:
           type: number
           minimum: 0
-          maximum: 1023
+          maximum: 1024
           description: "Rata-rata ADC mentah sensor MQ-2."
         flame_detected_ratio: { type: number, minimum: 0, maximum: 1 }
         pump_on_ratio: { type: number, minimum: 0, maximum: 1 }

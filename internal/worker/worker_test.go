@@ -29,6 +29,24 @@ func TestTopicDeviceID(t *testing.T) {
 	}
 }
 
+func TestADCInRange(t *testing.T) {
+	tests := []struct {
+		value float64
+		want  bool
+	}{
+		{-1, false},
+		{0, true},
+		{1023, true},
+		{1024, true},
+		{1025, false},
+	}
+	for _, tc := range tests {
+		if got := adcInRange(tc.value); got != tc.want {
+			t.Errorf("adcInRange(%v) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
 func TestParseRecordedAt(t *testing.T) {
 	before := time.Now().UTC()
 	if got := parseRecordedAt(""); got.Before(before) || got.After(time.Now().Add(time.Second)) {

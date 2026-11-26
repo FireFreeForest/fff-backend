@@ -19,6 +19,14 @@ import (
 
 const maxPayloadBytes = 64 * 1024
 
+// maxADCReading is the highest value a 10-bit ADC can report. Some boards
+// report 1024 (full scale) instead of 1023, so accept up to 1024.
+const maxADCReading = 1024
+
+func adcInRange(v float64) bool {
+	return v >= 0 && v <= maxADCReading
+}
+
 type environmentPayload struct {
 	DeviceID string `json:"device_id"`
 	Sensors  struct {
@@ -148,7 +156,7 @@ func (w *Worker) processEnvironment(ctx context.Context, topicDeviceID string, p
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Kelembapan udara tidak valid: %.2f", *p.Sensors.Humidity))
 		return nil
 	}
-	if *p.Sensors.SoilMoisture < 0 || *p.Sensors.SoilMoisture > 1023 {
+	if !adcInRange(*p.Sensors.SoilMoisture) {
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Nilai tanah tidak valid: %.2f", *p.Sensors.SoilMoisture))
 		return nil
 	}
@@ -208,11 +216,11 @@ func (w *Worker) processFire(ctx context.Context, topicDeviceID string, payload 
 		w.emitSensorError(ctx, device, "payload_incomplete", "Data sensor api/asap tidak lengkap.")
 		return nil
 	}
-	if *p.Sensors.SmokeLevel < 0 || *p.Sensors.SmokeLevel > 1023 {
+	if !adcInRange(float64(*p.Sensors.SmokeLevel)) {
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Kadar asap tidak valid: %d", *p.Sensors.SmokeLevel))
 		return nil
 	}
-	if p.Sensors.FlameLevel != nil && (*p.Sensors.FlameLevel < 0 || *p.Sensors.FlameLevel > 1023) {
+	if p.Sensors.FlameLevel != nil && !adcInRange(float64(*p.Sensors.FlameLevel)) {
 		w.emitSensorError(ctx, device, "value_out_of_range", fmt.Sprintf("Nilai api tidak valid: %d", *p.Sensors.FlameLevel))
 		return nil
 	}
