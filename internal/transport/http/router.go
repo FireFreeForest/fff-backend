@@ -97,6 +97,7 @@ func NewRouter(d Deps) *gin.Engine {
 	secured.GET("/devices/:deviceID/telemetry/environment/aggregate", h.aggregateEnvironment)
 	secured.GET("/devices/:deviceID/telemetry/fire", h.listFire)
 	secured.GET("/devices/:deviceID/telemetry/fire/aggregate", h.aggregateFire)
+	secured.GET("/devices/:deviceID/telemetry/device", h.listDeviceTelemetry)
 	secured.GET("/devices/:deviceID/telemetry/latest", h.latestTelemetry)
 	secured.GET("/devices/:deviceID/commands", h.listCommands)
 	secured.GET("/commands/:commandID", h.getCommand)
@@ -125,10 +126,13 @@ func NewRouter(d Deps) *gin.Engine {
 	admin.GET("/users", h.listUsers)
 	admin.POST("/users", h.createUser)
 	admin.PATCH("/users/:userID", h.updateUser)
-	admin.GET("/mcp-keys", h.listMCPKeys)
-	admin.POST("/mcp-keys", h.createMCPKey)
-	admin.PATCH("/mcp-keys/:keyID", h.updateMCPKey)
-	admin.POST("/mcp-keys/:keyID/rotate", h.rotateMCPKey)
+
+	mcpKeys := secured.Group("/admin")
+	mcpKeys.Use(requireRoles(domain.RoleAdmin))
+	mcpKeys.GET("/mcp-keys", h.listMCPKeys)
+	mcpKeys.POST("/mcp-keys", h.createMCPKey)
+	mcpKeys.PATCH("/mcp-keys/:keyID", h.updateMCPKey)
+	mcpKeys.POST("/mcp-keys/:keyID/rotate", h.rotateMCPKey)
 
 	return r
 }
