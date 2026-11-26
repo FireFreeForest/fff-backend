@@ -26,29 +26,39 @@ func (h *Handler) issueCommand(c *gin.Context) {
 		Payload *struct {
 			State    *bool `json:"state"`
 			Duration *int  `json:"duration"`
-		} `json:"payload" binding:"required"`
+		} `json:"payload"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Payload == nil || req.Payload.State == nil {
-		respondError(c, http.StatusBadRequest, "invalid_request", "action dan payload.state wajib diisi")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondError(c, http.StatusBadRequest, "invalid_request", "action wajib diisi")
 		return
 	}
 
 	action := domain.CommandAction(strings.ToUpper(strings.TrimSpace(req.Action)))
-	if action != domain.ActionSetPump {
-		respondError(c, http.StatusUnprocessableEntity, "validation_error", "Action yang didukung hanya SET_PUMP")
-		return
-	}
-
-	duration := int(h.cfg.AutoPumpDuration.Seconds())
-	if req.Payload.Duration != nil {
-		duration = *req.Payload.Duration
-	}
-	if !*req.Payload.State {
-		duration = 0
-	}
-	maxDuration := int(h.cfg.AutoPumpMax.Seconds())
-	if *req.Payload.State && (duration < 1 || duration > maxDuration) {
-		respondError(c, http.StatusUnprocessableEntity, "validation_error", fmt.Sprintf("duration harus antara 1 dan %d detik", maxDuration))
+	payload := map[string]any{}
+	switch action {
+	case domain.ActionSetPump:
+		if req.Payload == nil || req.Payload.State == nil {
+			respondError(c, http.StatusBadRequest, "invalid_request", "action dan payload.state wajib diisi")
+			return
+		}
+		duration := int(h.cfg.AutoPumpDuration.Seconds())
+		if req.Payload.Duration != nil {
+			duration = *req.Payload.Duration
+		}
+		if !*req.Payload.State {
+			duration = 0
+		}
+		maxDuration := int(h.cfg.AutoPumpMax.Seconds())
+		if *req.Payload.State && (duration < 1 || duration > maxDuration) {
+			respondError(c, http.StatusUnprocessableEntity, "validation_error", fmt.Sprintf("duration harus antara 1 dan %d detik", maxDuration))
+			return
+		}
+		payload["state"] = *req.Payload.State
+		payload["duration"] = duration
+	case domain.ActionGetAllTelemetry:
+		// No parameters: asks the device to publish every telemetry stream now.
+	default:
+		respondError(c, http.StatusUnprocessableEntity, "validation_error", "Action yang didukung hanya SET_PUMP dan GET_ALL_TELEMETRY")
 		return
 	}
 
@@ -76,7 +86,7 @@ func (h *Handler) issueCommand(c *gin.Context) {
 
 	cmd, err := h.commands.Issue(ctx, device, service.IssueCommandRequest{
 		Action:   action,
-		Payload:  map[string]any{"state": *req.Payload.State, "duration": duration},
+		Payload:  payload,
 		Origin:   domain.OriginManual,
 		IssuedBy: &userID,
 	})

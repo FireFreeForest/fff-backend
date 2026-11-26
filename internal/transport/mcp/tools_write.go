@@ -32,6 +32,10 @@ func registerOperationalTools(s *sdkmcp.Server, d Deps, role domain.UserRole) {
 		"Kirim perintah SET_PUMP ke perangkat. Gunakan idempotency_key agar retry aman.",
 		"Kirim Perintah Pompa", true), instrument(role, "issue_pump_command", t.issuePumpCommand))
 
+	sdkmcp.AddTool(s, writeTool("refresh_device_telemetry",
+		"Kirim command GET_ALL_TELEMETRY agar perangkat segera mempublikasikan seluruh telemetri terbaru.",
+		"Ambil Telemetri Sekarang", true), instrument(role, "refresh_device_telemetry", t.refreshDeviceTelemetry))
+
 	if role == domain.RolePetugas {
 		sdkmcp.AddTool(s, writeTool("resolve_event",
 			"Tandai event sebagai resolved. Hanya petugas yang boleh menyelesaikan event.",
@@ -167,6 +171,31 @@ func (t *tools) issuePumpCommand(ctx context.Context, _ *sdkmcp.CallToolRequest,
 	}
 	if redisKey != "" {
 		t.deps.Redis.Set(ctx, redisKey, cmd.CommandID, 24*time.Hour)
+	}
+	auditMCP(ctx, t.deps.Repo, principal, "command.issue", "command", cmd.CommandID, map[string]any{
+		"device_id": device.DeviceID,
+		"action":    cmd.Action,
+	})
+	return jsonResult(cmd)
+}
+
+func (t *tools) refreshDeviceTelemetry(ctx context.Context, _ *sdkmcp.CallToolRequest, in deviceInput) (*sdkmcp.CallToolResult, any, error) {
+	principal, err := operationalPrincipal(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	device, err := lookupDevice(ctx, t.deps.Repo, in.DeviceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd, err := t.deps.Commands.Issue(ctx, device, service.IssueCommandRequest{
+		Action:   domain.ActionGetAllTelemetry,
+		Payload:  map[string]any{},
+		Origin:   domain.OriginMCP,
+		IssuedBy: principal.ActorID,
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	auditMCP(ctx, t.deps.Repo, principal, "command.issue", "command", cmd.CommandID, map[string]any{
 		"device_id": device.DeviceID,

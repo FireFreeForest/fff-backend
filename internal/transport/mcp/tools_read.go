@@ -87,22 +87,24 @@ type emptyInput struct{}
 // ---------------------------------------------------------------- outputs
 
 type deviceStatusOutput struct {
-	Device        *domain.Device               `json:"device"`
-	Status        domain.DeviceStatus          `json:"status"`
-	LastSeenAt    *time.Time                   `json:"last_seen_at,omitempty"`
-	OnlineSince   *time.Time                   `json:"online_since,omitempty"`
-	UptimeSeconds int64                        `json:"uptime_seconds"`
-	Environment   *domain.TelemetryEnvironment `json:"environment,omitempty"`
-	Fire          *domain.TelemetryFire        `json:"fire,omitempty"`
-	RiskLevel     string                       `json:"risk_level"`
-	ServerTime    time.Time                    `json:"server_time"`
+	Device          *domain.Device               `json:"device"`
+	Status          domain.DeviceStatus          `json:"status"`
+	LastSeenAt      *time.Time                   `json:"last_seen_at,omitempty"`
+	OnlineSince     *time.Time                   `json:"online_since,omitempty"`
+	UptimeSeconds   int64                        `json:"uptime_seconds"`
+	Environment     *domain.TelemetryEnvironment `json:"environment,omitempty"`
+	Fire            *domain.TelemetryFire        `json:"fire,omitempty"`
+	DeviceTelemetry *domain.TelemetryDevice      `json:"device_telemetry,omitempty"`
+	RiskLevel       string                       `json:"risk_level"`
+	ServerTime      time.Time                    `json:"server_time"`
 }
 
 type latestTelemetryOutput struct {
-	Device      *domain.Device               `json:"device"`
-	Environment *domain.TelemetryEnvironment `json:"environment,omitempty"`
-	Fire        *domain.TelemetryFire        `json:"fire,omitempty"`
-	RiskLevel   string                       `json:"risk_level"`
+	Device          *domain.Device               `json:"device"`
+	Environment     *domain.TelemetryEnvironment `json:"environment,omitempty"`
+	Fire            *domain.TelemetryFire        `json:"fire,omitempty"`
+	DeviceTelemetry *domain.TelemetryDevice      `json:"device_telemetry,omitempty"`
+	RiskLevel       string                       `json:"risk_level"`
 }
 
 type aggregateOutput struct {
@@ -177,6 +179,10 @@ func registerReadTools(s *sdkmcp.Server, d Deps, role domain.UserRole) {
 		"Agregasi telemetri kebakaran per bucket waktu. interval_minutes=0 mengembalikan data mentah (maksimal 7 hari).",
 		"Agregasi Telemetri Kebakaran"), instrument(role, "aggregate_fire_telemetry", t.aggregateFireTelemetry))
 
+	sdkmcp.AddTool(s, readTool("list_device_telemetry",
+		"Riwayat telemetri perangkat (firmware, RSSI WiFi, tegangan dan persentase baterai) dengan filter waktu dan pagination.",
+		"Riwayat Telemetri Perangkat"), instrument(role, "list_device_telemetry", t.listDeviceTelemetry))
+
 	sdkmcp.AddTool(s, readTool("list_events",
 		"Daftar event dengan filter device, tipe, severity, status, dan rentang waktu.",
 		"Daftar Event"), instrument(role, "list_events", t.listEvents))
@@ -241,15 +247,16 @@ func (t *tools) getDeviceStatus(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	latest := latestTelemetry(ctx, t.deps.Redis, t.deps.Repo, device)
 	now := time.Now().UTC()
 	return jsonResult(deviceStatusOutput{
-		Device:        device,
-		Status:        device.Status,
-		LastSeenAt:    device.LastSeenAt,
-		OnlineSince:   device.OnlineSince,
-		UptimeSeconds: device.UptimeSeconds(now),
-		Environment:   latest.Environment,
-		Fire:          latest.Fire,
-		RiskLevel:     latest.RiskLevel,
-		ServerTime:    now,
+		Device:          device,
+		Status:          device.Status,
+		LastSeenAt:      device.LastSeenAt,
+		OnlineSince:     device.OnlineSince,
+		UptimeSeconds:   device.UptimeSeconds(now),
+		Environment:     latest.Environment,
+		Fire:            latest.Fire,
+		DeviceTelemetry: latest.DeviceTelemetry,
+		RiskLevel:       latest.RiskLevel,
+		ServerTime:      now,
 	})
 }
 
@@ -260,10 +267,11 @@ func (t *tools) getLatestTelemetry(ctx context.Context, _ *sdkmcp.CallToolReques
 	}
 	latest := latestTelemetry(ctx, t.deps.Redis, t.deps.Repo, device)
 	return jsonResult(latestTelemetryOutput{
-		Device:      device,
-		Environment: latest.Environment,
-		Fire:        latest.Fire,
-		RiskLevel:   latest.RiskLevel,
+		Device:          device,
+		Environment:     latest.Environment,
+		Fire:            latest.Fire,
+		DeviceTelemetry: latest.DeviceTelemetry,
+		RiskLevel:       latest.RiskLevel,
 	})
 }
 
@@ -403,6 +411,27 @@ func (t *tools) aggregateFireTelemetry(ctx context.Context, _ *sdkmcp.CallToolRe
 		BucketTimezone:  bucketTimezone,
 		Points:          rows,
 	})
+}
+
+func (t *tools) listDeviceTelemetry(ctx context.Context, _ *sdkmcp.CallToolRequest, in telemetryListInput) (*sdkmcp.CallToolResult, any, error) {
+	device, err := lookupDevice(ctx, t.deps.Repo, in.DeviceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	from, err := parseOptionalTime(in.From, "from")
+	if err != nil {
+		return nil, nil, err
+	}
+	to, err := parseOptionalTime(in.To, "to")
+	if err != nil {
+		return nil, nil, err
+	}
+	page, perPage, limit, offset := pageParams(in.Page, in.PerPage)
+	rows, total, err := t.deps.Repo.ListDeviceTelemetry(ctx, device.ID, from, to, limit, offset)
+	if err != nil {
+		return nil, nil, err
+	}
+	return jsonResult(newListResponse(rows, page, perPage, total))
 }
 
 func (t *tools) listEvents(ctx context.Context, _ *sdkmcp.CallToolRequest, in listEventsInput) (*sdkmcp.CallToolResult, any, error) {

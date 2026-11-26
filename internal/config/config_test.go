@@ -28,13 +28,13 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" {
 		t.Fatalf("HTTPAddr = %q", cfg.HTTPAddr)
 	}
-	if cfg.TemperatureHighC != 40 || cfg.SoilDryADC != 300 || cfg.SmokeLevelMax != 500 {
+	if cfg.TemperatureHighC != 40 || cfg.SoilDryADC != 300 || cfg.SmokeLevelMax != 500 || cfg.BatteryLowPercent != 20 {
 		t.Fatalf("unexpected threshold defaults: %+v", cfg)
 	}
 	if cfg.FCMMinSeverity != "error" {
 		t.Fatalf("FCMMinSeverity = %q", cfg.FCMMinSeverity)
 	}
-	wantEvents := "FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR"
+	wantEvents := "FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR,LOW_BATTERY"
 	if got := strings.Join(cfg.FCMEventTypes, ","); got != wantEvents {
 		t.Fatalf("FCMEventTypes = %q", got)
 	}

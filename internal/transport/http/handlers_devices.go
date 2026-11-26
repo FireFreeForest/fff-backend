@@ -214,12 +214,13 @@ func (h *Handler) latestTelemetry(c *gin.Context) {
 	if !ok {
 		return
 	}
-	env, fire, risk := h.cachedLatest(c, device)
+	env, fire, devTel, risk := h.cachedLatest(c, device)
 	respondData(c, http.StatusOK, gin.H{
-		"device":      device,
-		"environment": env,
-		"fire":        fire,
-		"risk_level":  risk,
+		"device":           device,
+		"environment":      env,
+		"fire":             fire,
+		"device_telemetry": devTel,
+		"risk_level":       risk,
 	})
 }
 
@@ -228,24 +229,26 @@ func (h *Handler) deviceStatus(c *gin.Context) {
 	if !ok {
 		return
 	}
-	env, fire, risk := h.cachedLatest(c, device)
+	env, fire, devTel, risk := h.cachedLatest(c, device)
 	respondData(c, http.StatusOK, gin.H{
-		"device":         device,
-		"status":         device.Status,
-		"last_seen_at":   device.LastSeenAt,
-		"online_since":   device.OnlineSince,
-		"uptime_seconds": device.UptimeSeconds(time.Now().UTC()),
-		"environment":    env,
-		"fire":           fire,
-		"risk_level":     risk,
-		"server_time":    time.Now().UTC(),
+		"device":           device,
+		"status":           device.Status,
+		"last_seen_at":     device.LastSeenAt,
+		"online_since":     device.OnlineSince,
+		"uptime_seconds":   device.UptimeSeconds(time.Now().UTC()),
+		"environment":      env,
+		"fire":             fire,
+		"device_telemetry": devTel,
+		"risk_level":       risk,
+		"server_time":      time.Now().UTC(),
 	})
 }
 
-func (h *Handler) cachedLatest(c *gin.Context, device *domain.Device) (*domain.TelemetryEnvironment, *domain.TelemetryFire, string) {
+func (h *Handler) cachedLatest(c *gin.Context, device *domain.Device) (*domain.TelemetryEnvironment, *domain.TelemetryFire, *domain.TelemetryDevice, string) {
 	ctx := c.Request.Context()
 	var env *domain.TelemetryEnvironment
 	var fire *domain.TelemetryFire
+	var devTel *domain.TelemetryDevice
 
 	if vals, err := h.rdb.HGetAll(ctx, "ff:latest:"+device.DeviceID).Result(); err == nil {
 		if raw, ok := vals["environment"]; ok && raw != "" {
@@ -260,6 +263,12 @@ func (h *Handler) cachedLatest(c *gin.Context, device *domain.Device) (*domain.T
 				fire = &f
 			}
 		}
+		if raw, ok := vals["device"]; ok && raw != "" {
+			var d domain.TelemetryDevice
+			if json.Unmarshal([]byte(raw), &d) == nil {
+				devTel = &d
+			}
+		}
 	}
 	if env == nil {
 		if e, err := h.repo.LatestEnvironment(ctx, device.ID); err == nil {
@@ -271,9 +280,14 @@ func (h *Handler) cachedLatest(c *gin.Context, device *domain.Device) (*domain.T
 			fire = f
 		}
 	}
+	if devTel == nil {
+		if d, err := h.repo.LatestDeviceTelemetry(ctx, device.ID); err == nil {
+			devTel = d
+		}
+	}
 	risk, err := h.rdb.Get(ctx, "ff:risk:"+device.DeviceID).Result()
 	if err != nil {
 		risk = "UNKNOWN"
 	}
-	return env, fire, risk
+	return env, fire, devTel, risk
 }

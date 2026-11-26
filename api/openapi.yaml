@@ -695,6 +695,35 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /devices/{deviceID}/telemetry/device:
+    parameters:
+      - $ref: "#/components/parameters/DeviceID"
+    get:
+      tags: [Telemetry]
+      summary: Riwayat telemetri perangkat
+      description: |
+        Riwayat firmware, RSSI WiFi, serta tegangan dan persentase baterai yang
+        dilaporkan perangkat.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PerPage"
+      responses:
+        "200":
+          description: Riwayat telemetri perangkat
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DeviceTelemetry" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /devices/{deviceID}/commands:
     parameters:
       - $ref: "#/components/parameters/DeviceID"
@@ -737,14 +766,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [action, payload]
+              required: [action]
               properties:
                 action:
                   type: string
-                  enum: [SET_PUMP]
+                  enum: [SET_PUMP, GET_ALL_TELEMETRY]
+                  description: |
+                    `SET_PUMP` menyalakan/mematikan pompa dan wajib menyertakan
+                    `payload.state`. `GET_ALL_TELEMETRY` meminta perangkat
+                    segera mempublikasikan seluruh telemetri terbaru dan tidak
+                    membutuhkan payload.
                 payload:
                   type: object
-                  required: [state]
+                  description: Wajib untuk `SET_PUMP`; boleh kosong untuk `GET_ALL_TELEMETRY`.
                   properties:
                     state: { type: boolean }
                     duration:
@@ -833,6 +867,7 @@ paths:
               - SOIL_DRY
               - DEVICE_OFFLINE
               - SENSOR_ERROR
+              - LOW_BATTERY
         - name: device_id
           in: query
           schema: { type: string }
@@ -1312,6 +1347,32 @@ components:
         recorded_at: { type: string, format: date-time }
         received_at: { type: string, format: date-time }
 
+    DeviceTelemetry:
+      type: object
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        device_id:
+          {
+            type: string,
+            format: uuid,
+            description: "ID internal device (UUID), bukan kode device_id",
+          }
+        firmware_version: { type: string }
+        wifi_rssi:
+          { type: integer, nullable: true, description: "RSSI WiFi dalam dBm." }
+        battery_voltage:
+          { type: number, nullable: true, description: "Tegangan baterai (volt)." }
+        battery_percentage:
+          {
+            type: integer,
+            nullable: true,
+            minimum: 0,
+            maximum: 100,
+            description: "Persentase sisa baterai.",
+          }
+        recorded_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time }
+
     EnvironmentAggregate:
       type: object
       properties:
@@ -1447,6 +1508,7 @@ components:
             - SOIL_DRY
             - DEVICE_OFFLINE
             - SENSOR_ERROR
+            - LOW_BATTERY
         severity: { type: string, enum: [error, warning, critical] }
         source: { type: string }
         message: { type: string }
@@ -1517,7 +1579,7 @@ components:
         id: { type: string, format: uuid }
         command_id: { type: string }
         device_id: { type: string, format: uuid }
-        action: { type: string, enum: [SET_PUMP] }
+        action: { type: string, enum: [SET_PUMP, GET_ALL_TELEMETRY] }
         payload: { type: object }
         origin: { type: string, enum: [manual, system, mcp] }
         status:
@@ -1546,6 +1608,12 @@ components:
             allOf: [{ $ref: "#/components/schemas/FireTelemetry" }],
             nullable: true,
           }
+        device_telemetry:
+          {
+            type: object,
+            allOf: [{ $ref: "#/components/schemas/DeviceTelemetry" }],
+            nullable: true,
+          }
         risk_level:
           { type: string, enum: [NORMAL, WASPADA, BAHAYA, DARURAT, UNKNOWN] }
 
@@ -1567,6 +1635,12 @@ components:
           {
             type: object,
             allOf: [{ $ref: "#/components/schemas/FireTelemetry" }],
+            nullable: true,
+          }
+        device_telemetry:
+          {
+            type: object,
+            allOf: [{ $ref: "#/components/schemas/DeviceTelemetry" }],
             nullable: true,
           }
         risk_level:

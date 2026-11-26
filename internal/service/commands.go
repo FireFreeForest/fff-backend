@@ -46,22 +46,28 @@ type IssueCommandRequest struct {
 }
 
 func (s *CommandService) Issue(ctx context.Context, device *domain.Device, req IssueCommandRequest) (*domain.Command, error) {
-	if req.Action != domain.ActionSetPump {
+	switch req.Action {
+	case domain.ActionSetPump:
+		state, ok := req.Payload["state"].(bool)
+		if !ok {
+			return nil, fmt.Errorf("%w: payload state is required", ErrValidation)
+		}
+		duration, _ := toInt(req.Payload["duration"])
+		if state && (duration < 1 || duration > s.maxDuration) {
+			return nil, fmt.Errorf("%w: duration must be between 1 and %d seconds", ErrValidation, s.maxDuration)
+		}
+		if !state {
+			duration = 0
+		}
+		req.Payload["state"] = state
+		req.Payload["duration"] = duration
+	case domain.ActionGetAllTelemetry:
+		// Request the device to publish every telemetry stream on demand. No
+		// payload parameters are required.
+		req.Payload = map[string]any{}
+	default:
 		return nil, fmt.Errorf("%w: unsupported action", ErrValidation)
 	}
-	state, ok := req.Payload["state"].(bool)
-	if !ok {
-		return nil, fmt.Errorf("%w: payload state is required", ErrValidation)
-	}
-	duration, _ := toInt(req.Payload["duration"])
-	if state && (duration < 1 || duration > s.maxDuration) {
-		return nil, fmt.Errorf("%w: duration must be between 1 and %d seconds", ErrValidation, s.maxDuration)
-	}
-	if !state {
-		duration = 0
-	}
-	req.Payload["state"] = state
-	req.Payload["duration"] = duration
 
 	inner, err := json.Marshal(req.Payload)
 	if err != nil {

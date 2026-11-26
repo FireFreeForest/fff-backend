@@ -281,6 +281,10 @@ func (r *Repository) CreateFire(ctx context.Context, t *domain.TelemetryFire) er
 	return r.db.WithContext(ctx).Create(t).Error
 }
 
+func (r *Repository) CreateDeviceTelemetry(ctx context.Context, t *domain.TelemetryDevice) error {
+	return r.db.WithContext(ctx).Create(t).Error
+}
+
 func (r *Repository) ListEnvironment(ctx context.Context, deviceID uuid.UUID, from, to *time.Time, limit, offset int) ([]domain.TelemetryEnvironment, int64, error) {
 	build := func() *gorm.DB {
 		q := r.db.WithContext(ctx).Model(&domain.TelemetryEnvironment{}).Where("device_id = ?", deviceID)
@@ -317,6 +321,26 @@ func (r *Repository) ListFire(ctx context.Context, deviceID uuid.UUID, from, to 
 		return nil, 0, err
 	}
 	var rows []domain.TelemetryFire
+	err := build().Order("recorded_at DESC").Limit(limit).Offset(offset).Find(&rows).Error
+	return rows, total, err
+}
+
+func (r *Repository) ListDeviceTelemetry(ctx context.Context, deviceID uuid.UUID, from, to *time.Time, limit, offset int) ([]domain.TelemetryDevice, int64, error) {
+	build := func() *gorm.DB {
+		q := r.db.WithContext(ctx).Model(&domain.TelemetryDevice{}).Where("device_id = ?", deviceID)
+		if from != nil {
+			q = q.Where("recorded_at >= ?", *from)
+		}
+		if to != nil {
+			q = q.Where("recorded_at <= ?", *to)
+		}
+		return q
+	}
+	var total int64
+	if err := build().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []domain.TelemetryDevice
 	err := build().Order("recorded_at DESC").Limit(limit).Offset(offset).Find(&rows).Error
 	return rows, total, err
 }
@@ -589,6 +613,15 @@ func (r *Repository) LatestFire(ctx context.Context, deviceID uuid.UUID) (*domai
 	return &row, nil
 }
 
+func (r *Repository) LatestDeviceTelemetry(ctx context.Context, deviceID uuid.UUID) (*domain.TelemetryDevice, error) {
+	var row domain.TelemetryDevice
+	if err := r.db.WithContext(ctx).Where("device_id = ?", deviceID).
+		Order("recorded_at DESC").First(&row).Error; err != nil {
+		return nil, normalizeErr(err)
+	}
+	return &row, nil
+}
+
 func (r *Repository) DeleteTelemetryBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	var total int64
 	res := r.db.WithContext(ctx).Where("received_at < ?", cutoff).Delete(&domain.TelemetryEnvironment{})
@@ -597,6 +630,11 @@ func (r *Repository) DeleteTelemetryBefore(ctx context.Context, cutoff time.Time
 	}
 	total += res.RowsAffected
 	res = r.db.WithContext(ctx).Where("received_at < ?", cutoff).Delete(&domain.TelemetryFire{})
+	if res.Error != nil {
+		return total, res.Error
+	}
+	total += res.RowsAffected
+	res = r.db.WithContext(ctx).Where("received_at < ?", cutoff).Delete(&domain.TelemetryDevice{})
 	if res.Error != nil {
 		return total, res.Error
 	}

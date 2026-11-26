@@ -24,17 +24,25 @@ const (
 	RiskDarurat  = "DARURAT"
 	latestTTL    = 48 * time.Hour
 	riskStateTTL = time.Hour
+
+	telemetryAckKeyPrefix   = "ff:cmdack:"
+	telemetryThrottlePrefix = "ff:refresh:"
+	telemetryAckTTL         = 5 * time.Minute
+	telemetryRefreshGrace   = 500 * time.Millisecond
+	telemetryRefreshPoll    = 50 * time.Millisecond
 )
 
 type LatestState struct {
 	Environment *domain.TelemetryEnvironment `json:"environment,omitempty"`
 	Fire        *domain.TelemetryFire        `json:"fire,omitempty"`
+	Device      *domain.TelemetryDevice      `json:"device,omitempty"`
 }
 
 type Thresholds struct {
-	TemperatureHighC float64
-	SoilDryADC       float64
-	SmokeLevelMax    int
+	TemperatureHighC  float64
+	SoilDryADC        float64
+	SmokeLevelMax     int
+	BatteryLowPercent int
 }
 
 type ConditionResult struct {
@@ -65,14 +73,15 @@ func NewRiskEngine(repo *repository.Repository, rdb *goredis.Client, commands *C
 
 func (e *RiskEngine) Thresholds() Thresholds {
 	return Thresholds{
-		TemperatureHighC: e.cfg.TemperatureHighC,
-		SoilDryADC:       e.cfg.SoilDryADC,
-		SmokeLevelMax:    e.cfg.SmokeLevelMax,
+		TemperatureHighC:  e.cfg.TemperatureHighC,
+		SoilDryADC:        e.cfg.SoilDryADC,
+		SmokeLevelMax:     e.cfg.SmokeLevelMax,
+		BatteryLowPercent: e.cfg.BatteryLowPercent,
 	}
 }
 
 func EvaluateConditions(state LatestState, th Thresholds) ([]ConditionResult, string) {
-	results := make([]ConditionResult, 0, 4)
+	results := make([]ConditionResult, 0, 5)
 
 	if env := state.Environment; env != nil {
 		temperatureHigh := env.Temperature != nil && *env.Temperature >= th.TemperatureHighC
@@ -107,6 +116,18 @@ func EvaluateConditions(state LatestState, th Thresholds) ([]ConditionResult, st
 			Source:   "mq2_sensor",
 			Message:  "Kadar asap/gas melebihi ambang batas.",
 			Active:   fire.SmokeLevel >= th.SmokeLevelMax,
+		})
+	}
+
+	if dev := state.Device; dev != nil {
+		batteryLow := th.BatteryLowPercent > 0 && dev.BatteryPercentage != nil &&
+			*dev.BatteryPercentage < th.BatteryLowPercent
+		results = append(results, ConditionResult{
+			Type:     domain.EventLowBattery,
+			Severity: domain.SeverityWarning,
+			Source:   "device_battery",
+			Message:  fmt.Sprintf("Baterai perangkat lemah (di bawah %d%%).", th.BatteryLowPercent),
+			Active:   batteryLow,
 		})
 	}
 
@@ -166,6 +187,20 @@ func (e *RiskEngine) RecordFire(ctx context.Context, device *domain.Device, tel 
 	return res, nil
 }
 
+// RecordDevice caches the latest device telemetry (firmware, wifi, battery) and
+// evaluates battery health, so a LOW_BATTERY event is raised when the device
+// reports a low charge and resolved automatically once it recovers.
+func (e *RiskEngine) RecordDevice(ctx context.Context, device *domain.Device, tel *domain.TelemetryDevice) (*EvaluationResult, error) {
+	if err := e.storeLatest(ctx, device.DeviceID, "device", tel); err != nil {
+		e.log.Warn("failed to cache device telemetry", "device_id", device.DeviceID, "error", err)
+	}
+	state, err := e.loadLatest(ctx, device.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	return e.evaluateAndSync(ctx, device, state)
+}
+
 func (e *RiskEngine) evaluateAndSync(ctx context.Context, device *domain.Device, state LatestState) (*EvaluationResult, error) {
 	conditions, level := EvaluateConditions(state, e.Thresholds())
 	res := &EvaluationResult{RiskLevel: level}
@@ -188,7 +223,7 @@ func (e *RiskEngine) evaluateAndSync(ctx context.Context, device *domain.Device,
 			if !e.acquireCooldown(ctx, device.DeviceID, cond.Type) {
 				continue
 			}
-			ev, err := e.createEvent(ctx, device, cond.Type, cond.Source, cond.Message, state, nil)
+			ev, err := e.createEvent(ctx, device, cond.Type, cond.Source, cond.Message, true, nil)
 			if err != nil {
 				e.releaseCooldown(ctx, device.DeviceID, cond.Type)
 				return nil, err
@@ -226,7 +261,7 @@ func (e *RiskEngine) evaluateAndSync(ctx context.Context, device *domain.Device,
 }
 
 func (e *RiskEngine) EmitSensorError(ctx context.Context, device *domain.Device, source, message string) (*domain.Event, error) {
-	return e.emitEvent(ctx, device, domain.EventSensorError, source, message, e.cfg.EventCooldown, nil)
+	return e.emitEvent(ctx, device, domain.EventSensorError, source, message, e.cfg.EventCooldown, nil, true)
 }
 
 func (e *RiskEngine) EmitDeviceEvent(ctx context.Context, device *domain.Device, eventType domain.EventType, source, message string) (*domain.Event, error) {
@@ -234,14 +269,17 @@ func (e *RiskEngine) EmitDeviceEvent(ctx context.Context, device *domain.Device,
 	if eventType == domain.EventFireDetected {
 		cooldown = e.cfg.FireCooldown
 	}
-	return e.emitEvent(ctx, device, eventType, source, message, cooldown, nil)
+	// A device that just went offline cannot answer a telemetry refresh command,
+	// so its metadata is built from the last cached snapshot instead.
+	refresh := eventType != domain.EventDeviceOffline
+	return e.emitEvent(ctx, device, eventType, source, message, cooldown, nil, refresh)
 }
 
-func (e *RiskEngine) emitEvent(ctx context.Context, device *domain.Device, eventType domain.EventType, source, message string, cooldown time.Duration, meta map[string]any) (*domain.Event, error) {
+func (e *RiskEngine) emitEvent(ctx context.Context, device *domain.Device, eventType domain.EventType, source, message string, cooldown time.Duration, meta map[string]any, refresh bool) (*domain.Event, error) {
 	if !e.acquireCooldownFor(ctx, device.DeviceID, eventType, cooldown) {
 		return nil, nil
 	}
-	ev, err := e.createEvent(ctx, device, eventType, source, message, LatestState{}, meta)
+	ev, err := e.createEvent(ctx, device, eventType, source, message, refresh, meta)
 	if err != nil {
 		e.releaseCooldown(ctx, device.DeviceID, eventType)
 		return nil, err
@@ -249,9 +287,9 @@ func (e *RiskEngine) emitEvent(ctx context.Context, device *domain.Device, event
 	return ev, nil
 }
 
-func (e *RiskEngine) createEvent(ctx context.Context, device *domain.Device, eventType domain.EventType, source, message string, state LatestState, extra map[string]any) (*domain.Event, error) {
+func (e *RiskEngine) createEvent(ctx context.Context, device *domain.Device, eventType domain.EventType, source, message string, refresh bool, extra map[string]any) (*domain.Event, error) {
 	now := time.Now().UTC()
-	meta := stateMetadata(state)
+	meta := e.snapshotMetadata(ctx, device, refresh)
 	for k, v := range extra {
 		meta[k] = v
 	}
@@ -413,6 +451,12 @@ func (e *RiskEngine) loadLatest(ctx context.Context, deviceID string) (LatestSta
 			state.Fire = &fire
 		}
 	}
+	if raw, ok := vals["device"]; ok && raw != "" {
+		var dev domain.TelemetryDevice
+		if err := json.Unmarshal([]byte(raw), &dev); err == nil {
+			state.Device = &dev
+		}
+	}
 	return state, nil
 }
 
@@ -476,5 +520,170 @@ func stateMetadata(state LatestState) map[string]any {
 		meta["smoke_level"] = fire.SmokeLevel
 		meta["pump"] = fire.Pump
 	}
+	if dev := state.Device; dev != nil {
+		if dev.FirmwareVersion != "" {
+			meta["firmware_version"] = dev.FirmwareVersion
+		}
+		if dev.WifiRSSI != nil {
+			meta["wifi_rssi"] = *dev.WifiRSSI
+		}
+		if dev.BatteryVoltage != nil {
+			meta["battery_voltage"] = *dev.BatteryVoltage
+		}
+		if dev.BatteryPercentage != nil {
+			meta["battery_percentage"] = *dev.BatteryPercentage
+		}
+	}
 	return meta
+}
+
+// snapshotMetadata builds the telemetry snapshot attached to an event. When
+// refresh is true it first asks the device for its current telemetry via
+// GET_ALL_TELEMETRY and waits for the acknowledgement; on success the metadata
+// is tagged with metadata_source=command, otherwise it falls back to the last
+// cached or persisted snapshot tagged metadata_source=cache.
+func (e *RiskEngine) snapshotMetadata(ctx context.Context, device *domain.Device, refresh bool) map[string]any {
+	source := "cache"
+	commandID := ""
+	if refresh {
+		id, fresh := e.requestTelemetryRefresh(ctx, device)
+		commandID = id
+		if fresh {
+			source = "command"
+		}
+	}
+	state := e.currentState(ctx, device)
+	meta := stateMetadata(state)
+	meta["metadata_source"] = source
+	meta["captured_at"] = time.Now().UTC()
+	if commandID != "" {
+		meta["command_id"] = commandID
+	}
+	return meta
+}
+
+func (e *RiskEngine) currentState(ctx context.Context, device *domain.Device) LatestState {
+	state, err := e.loadLatest(ctx, device.DeviceID)
+	if err != nil {
+		e.log.Warn("failed to load latest telemetry snapshot", "device_id", device.DeviceID, "error", err)
+	}
+	if state.Environment == nil {
+		if env, err := e.repo.LatestEnvironment(ctx, device.ID); err == nil {
+			state.Environment = env
+		}
+	}
+	if state.Fire == nil {
+		if fire, err := e.repo.LatestFire(ctx, device.ID); err == nil {
+			state.Fire = fire
+		}
+	}
+	if state.Device == nil {
+		if dev, err := e.repo.LatestDeviceTelemetry(ctx, device.ID); err == nil {
+			state.Device = dev
+		}
+	}
+	return state
+}
+
+// requestTelemetryRefresh issues a GET_ALL_TELEMETRY command and blocks until
+// the device acknowledges it, or the timeout elapses. It returns the command id
+// and whether fresh telemetry was confirmed. The device publishes every
+// telemetry stream before acking, so the ack is the completion signal; the
+// telemetry payloads themselves do not carry the command id. A per-device
+// throttle prevents a command storm when several events fire close together.
+func (e *RiskEngine) requestTelemetryRefresh(ctx context.Context, device *domain.Device) (string, bool) {
+	if e.commands == nil || e.rdb == nil || e.cfg.TelemetryRefreshTimeout <= 0 {
+		return "", false
+	}
+	if e.cfg.TelemetryRefreshThrottle > 0 {
+		acquired, err := e.rdb.SetNX(ctx, telemetryThrottlePrefix+device.DeviceID, "1", e.cfg.TelemetryRefreshThrottle).Result()
+		if err != nil {
+			e.log.Warn("telemetry refresh throttle check failed", "device_id", device.DeviceID, "error", err)
+			return "", false
+		}
+		if !acquired {
+			return "", false
+		}
+	}
+
+	issuedAt := time.Now().UTC()
+	cmd, err := e.commands.Issue(ctx, device, IssueCommandRequest{
+		Action:  domain.ActionGetAllTelemetry,
+		Payload: map[string]any{},
+		Origin:  domain.OriginSystem,
+	})
+	if err != nil {
+		e.log.Warn("failed to issue telemetry refresh command", "device_id", device.DeviceID, "error", err)
+		return "", false
+	}
+
+	if !e.waitForTelemetryAck(ctx, cmd.CommandID) {
+		e.log.Info("telemetry refresh ack not received before timeout",
+			"device_id", device.DeviceID, "command_id", cmd.CommandID)
+		return cmd.CommandID, false
+	}
+	e.waitForFreshTelemetry(ctx, device.DeviceID, issuedAt)
+	return cmd.CommandID, true
+}
+
+func (e *RiskEngine) waitForTelemetryAck(ctx context.Context, commandID string) bool {
+	deadline := time.Now().Add(e.cfg.TelemetryRefreshTimeout)
+	key := telemetryAckKeyPrefix + commandID
+	for {
+		val, err := e.rdb.Get(ctx, key).Result()
+		if err == nil {
+			return val == string(domain.CommandSuccess)
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(telemetryRefreshPoll):
+		}
+	}
+}
+
+// waitForFreshTelemetry gives the worker a brief moment to persist the telemetry
+// the device just published, so the snapshot does not read a stale cache entry.
+func (e *RiskEngine) waitForFreshTelemetry(ctx context.Context, deviceID string, issuedAt time.Time) {
+	deadline := time.Now().Add(telemetryRefreshGrace)
+	for {
+		if latestCacheReceivedAt(ctx, e.rdb, deviceID).After(issuedAt) {
+			return
+		}
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(telemetryRefreshPoll):
+		}
+	}
+}
+
+func latestCacheReceivedAt(ctx context.Context, rdb *goredis.Client, deviceID string) time.Time {
+	if rdb == nil {
+		return time.Time{}
+	}
+	vals, err := rdb.HGetAll(ctx, "ff:latest:"+deviceID).Result()
+	if err != nil {
+		return time.Time{}
+	}
+	var latest time.Time
+	for _, field := range []string{"environment", "fire", "device"} {
+		raw, ok := vals[field]
+		if !ok || raw == "" {
+			continue
+		}
+		var recv struct {
+			ReceivedAt time.Time `json:"received_at"`
+		}
+		if json.Unmarshal([]byte(raw), &recv) == nil && recv.ReceivedAt.After(latest) {
+			latest = recv.ReceivedAt
+		}
+	}
+	return latest
 }

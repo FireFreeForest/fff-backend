@@ -18,8 +18,12 @@ func fire(flame bool, smoke int) *domain.TelemetryFire {
 	return &domain.TelemetryFire{FlameDetected: flame, SmokeLevel: smoke}
 }
 
+func device(battery int) *domain.TelemetryDevice {
+	return &domain.TelemetryDevice{BatteryPercentage: &battery}
+}
+
 func TestEvaluateConditions(t *testing.T) {
-	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500}
+	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500, BatteryLowPercent: 20}
 
 	tests := []struct {
 		name      string
@@ -73,6 +77,28 @@ func TestEvaluateConditions(t *testing.T) {
 			state:     LatestState{Environment: &domain.TelemetryEnvironment{SoilMoisture: 640}, Fire: fire(false, 120)},
 			wantLevel: RiskNormal,
 		},
+		{
+			name:      "low battery raises a warning",
+			state:     LatestState{Device: device(18)},
+			wantLevel: RiskWaspada,
+			wantEvent: []domain.EventType{domain.EventLowBattery},
+		},
+		{
+			name:      "battery exactly at threshold is still healthy",
+			state:     LatestState{Device: device(20)},
+			wantLevel: RiskNormal,
+		},
+		{
+			name:      "healthy battery stays normal",
+			state:     LatestState{Device: device(90)},
+			wantLevel: RiskNormal,
+		},
+		{
+			name:      "low battery adds to sensor warnings",
+			state:     LatestState{Environment: environment(45, 60, 640), Device: device(10)},
+			wantLevel: RiskBahaya,
+			wantEvent: []domain.EventType{domain.EventTemperatureHigh, domain.EventLowBattery},
+		},
 	}
 
 	for _, tc := range tests {
@@ -100,10 +126,11 @@ func TestEvaluateConditions(t *testing.T) {
 }
 
 func TestEvaluateConditionsSeverity(t *testing.T) {
-	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500}
+	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500, BatteryLowPercent: 20}
 	conditions, _ := EvaluateConditions(LatestState{
 		Environment: environment(45, 30, 10),
 		Fire:        fire(true, 800),
+		Device:      device(5),
 	}, th)
 
 	severities := make(map[domain.EventType]domain.Severity)
@@ -115,9 +142,70 @@ func TestEvaluateConditionsSeverity(t *testing.T) {
 	if severities[domain.EventFireDetected] != domain.SeverityCritical {
 		t.Fatalf("fire severity = %s, want critical", severities[domain.EventFireDetected])
 	}
-	for _, typ := range []domain.EventType{domain.EventTemperatureHigh, domain.EventSoilDry, domain.EventSmokeDetected} {
+	for _, typ := range []domain.EventType{domain.EventTemperatureHigh, domain.EventSoilDry, domain.EventSmokeDetected, domain.EventLowBattery} {
 		if severities[typ] != domain.SeverityWarning {
 			t.Fatalf("%s severity = %s, want warning", typ, severities[typ])
+		}
+	}
+}
+
+func TestEvaluateConditionsBatteryThresholdDisabled(t *testing.T) {
+	th := Thresholds{TemperatureHighC: 40, SoilDryADC: 300, SmokeLevelMax: 500}
+	conditions, level := EvaluateConditions(LatestState{Device: device(1)}, th)
+	if level != RiskNormal {
+		t.Fatalf("level = %s, want %s when battery threshold is disabled", level, RiskNormal)
+	}
+	for _, c := range conditions {
+		if c.Type == domain.EventLowBattery && c.Active {
+			t.Fatal("battery condition must stay inactive when THRESHOLD_BATTERY_LOW_PERCENT is 0")
+		}
+	}
+}
+
+func TestStateMetadataIncludesDeviceTelemetry(t *testing.T) {
+	rssi := -49
+	voltage := 3.456729
+	percentage := 18
+	state := LatestState{
+		Environment: environment(31.5, 60, 640),
+		Fire:        fire(false, 120),
+		Device: &domain.TelemetryDevice{
+			FirmwareVersion:   "1.3.0",
+			WifiRSSI:          &rssi,
+			BatteryVoltage:    &voltage,
+			BatteryPercentage: &percentage,
+		},
+	}
+
+	meta := stateMetadata(state)
+	checks := map[string]any{
+		"temperature":        31.5,
+		"humidity":           60.0,
+		"soil_moisture":      640.0,
+		"flame_detected":     false,
+		"smoke_level":        120,
+		"pump":               false,
+		"firmware_version":   "1.3.0",
+		"wifi_rssi":          -49,
+		"battery_voltage":    3.456729,
+		"battery_percentage": 18,
+	}
+	for key, want := range checks {
+		got, ok := meta[key]
+		if !ok {
+			t.Fatalf("metadata missing %q: %+v", key, meta)
+		}
+		if got != want {
+			t.Fatalf("metadata[%q] = %v, want %v", key, got, want)
+		}
+	}
+}
+
+func TestStateMetadataOmitsAbsentDeviceTelemetry(t *testing.T) {
+	meta := stateMetadata(LatestState{Environment: environment(31.5, 60, 640), Fire: fire(false, 120)})
+	for _, key := range []string{"firmware_version", "wifi_rssi", "battery_voltage", "battery_percentage"} {
+		if _, ok := meta[key]; ok {
+			t.Fatalf("metadata should omit %q when device telemetry is absent: %+v", key, meta)
 		}
 	}
 }

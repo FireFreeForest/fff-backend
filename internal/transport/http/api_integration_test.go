@@ -44,6 +44,9 @@ func TestAPIFlowIntegration(t *testing.T) {
 	t.Setenv("SEED_DEVICE_ID", "")
 	t.Setenv("MCP_ENABLED", "true")
 	t.Setenv("MCP_RATE_LIMIT_PER_MIN", "1000")
+	// Disable the telemetry refresh command so event creation does not block
+	// waiting for a device ack that no broker will deliver in this test.
+	t.Setenv("TELEMETRY_REFRESH_TIMEOUT", "0s")
 
 	if err := postgres.Migrate(dsn); err != nil {
 		t.Fatalf("migrate: %v", err)
@@ -53,7 +56,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("open postgres: %v", err)
 	}
 	if err := db.Exec(`TRUNCATE event_timeline, audit_logs, outbox, commands, events, telemetry_fire,
-		telemetry_environment, devices, refresh_tokens, push_tokens, mcp_api_keys, users RESTART IDENTITY CASCADE`).Error; err != nil {
+		telemetry_environment, telemetry_device, devices, refresh_tokens, push_tokens, mcp_api_keys, users RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -259,10 +262,82 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("issue command status=%d command=%q", status, issued.Data.CommandID)
 	}
 
+	var refreshIssued struct {
+		Data struct {
+			CommandID string          `json:"command_id"`
+			Action    string          `json:"action"`
+			Origin    string          `json:"origin"`
+			Payload   json.RawMessage `json:"payload"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/devices/TEST-001/commands", token, map[string]any{
+		"action": "GET_ALL_TELEMETRY",
+	}, &refreshIssued)
+	if status != http.StatusAccepted || refreshIssued.Data.CommandID == "" ||
+		refreshIssued.Data.Action != string(domain.ActionGetAllTelemetry) ||
+		refreshIssued.Data.Origin != string(domain.OriginManual) ||
+		string(refreshIssued.Data.Payload) != "{}" {
+		t.Fatalf("issue refresh command status=%d body=%+v", status, refreshIssued.Data)
+	}
+	storedRefresh, err := repo.GetCommandByCommandID(context.Background(), refreshIssued.Data.CommandID)
+	if err != nil || storedRefresh.Action != domain.ActionGetAllTelemetry || string(storedRefresh.Payload) != "{}" {
+		t.Fatalf("stored refresh command = %+v err=%v", storedRefresh, err)
+	}
+
+	var refreshOutbox struct {
+		Topic   string          `json:"topic"`
+		Payload json.RawMessage `json:"payload"`
+		QoS     int             `json:"qos" gorm:"column:qos"`
+		Status  string          `json:"status"`
+	}
+	if err := db.Table("outbox").
+		Where("topic = ? AND payload->>'action' = ?", cfg.MQTTTopicPrefix+"/TEST-001/command", string(domain.ActionGetAllTelemetry)).
+		Order("created_at DESC").First(&refreshOutbox).Error; err != nil {
+		t.Fatalf("load refresh outbox: %v", err)
+	}
+	var refreshOutboxPayload struct {
+		Action  string         `json:"action"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(refreshOutbox.Payload, &refreshOutboxPayload); err != nil {
+		t.Fatalf("decode refresh outbox payload: %v", err)
+	}
+	if refreshOutbox.QoS != 1 || refreshOutbox.Status != "pending" ||
+		refreshOutboxPayload.Action != string(domain.ActionGetAllTelemetry) || len(refreshOutboxPayload.Payload) != 0 {
+		t.Fatalf("refresh outbox = topic:%s qos:%d status:%s payload:%s",
+			refreshOutbox.Topic, refreshOutbox.QoS, refreshOutbox.Status, refreshOutbox.Payload)
+	}
+
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/devices/TEST-001/commands", token, map[string]any{
+		"action": "GET_ALL_TELEMETRY", "payload": map[string]any{},
+	}, &refreshIssued)
+	if status != http.StatusAccepted {
+		t.Fatalf("issue refresh command with empty payload status=%d", status)
+	}
+	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/devices/TEST-001/commands", token, map[string]any{
+		"action": "REBOOT",
+	}, nil)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown action status=%d want 422", status)
+	}
+
 	device, err := repo.GetDeviceByDeviceID(context.Background(), "TEST-001")
 	if err != nil {
 		t.Fatalf("get device: %v", err)
 	}
+
+	deviceTelBase := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	deviceRows := []*domain.TelemetryDevice{
+		{DeviceID: device.ID, FirmwareVersion: "1.2.0", WifiRSSI: intPtr(-55), BatteryVoltage: floatPtr(3.9), BatteryPercentage: intPtr(80), RecordedAt: deviceTelBase, ReceivedAt: deviceTelBase},
+		{DeviceID: device.ID, FirmwareVersion: "1.3.0", WifiRSSI: intPtr(-49), BatteryVoltage: floatPtr(3.45), BatteryPercentage: intPtr(60), RecordedAt: deviceTelBase.Add(2 * time.Minute), ReceivedAt: deviceTelBase},
+		{DeviceID: device.ID, FirmwareVersion: "1.4.0", WifiRSSI: intPtr(-44), BatteryVoltage: floatPtr(3.3), BatteryPercentage: intPtr(18), RecordedAt: deviceTelBase.Add(5 * time.Minute), ReceivedAt: deviceTelBase},
+	}
+	for _, row := range deviceRows {
+		if err := repo.CreateDeviceTelemetry(context.Background(), row); err != nil {
+			t.Fatalf("create device telemetry: %v", err)
+		}
+	}
+
 	now := time.Now().UTC()
 	tel := &domain.TelemetryFire{
 		DeviceID: device.ID, FlameDetected: true, SmokeLevel: 120,
@@ -278,6 +353,25 @@ func TestAPIFlowIntegration(t *testing.T) {
 	if evaluation.RiskLevel != service.RiskDarurat || len(evaluation.Events) != 1 {
 		t.Fatalf("evaluation risk=%s events=%d", evaluation.RiskLevel, len(evaluation.Events))
 	}
+
+	var fireMeta struct {
+		FlameDetected     bool    `json:"flame_detected"`
+		SmokeLevel        int     `json:"smoke_level"`
+		FirmwareVersion   string  `json:"firmware_version"`
+		WifiRSSI          int     `json:"wifi_rssi"`
+		BatteryVoltage    float64 `json:"battery_voltage"`
+		BatteryPercentage int     `json:"battery_percentage"`
+		MetadataSource    string  `json:"metadata_source"`
+	}
+	if err := json.Unmarshal(evaluation.Events[0].Metadata, &fireMeta); err != nil {
+		t.Fatalf("decode fire event metadata: %v", err)
+	}
+	if !fireMeta.FlameDetected || fireMeta.SmokeLevel != 120 || fireMeta.FirmwareVersion != "1.4.0" ||
+		fireMeta.WifiRSSI != -44 || fireMeta.BatteryVoltage != 3.3 || fireMeta.BatteryPercentage != 18 ||
+		fireMeta.MetadataSource != "cache" {
+		t.Fatalf("fire event metadata = %+v", fireMeta)
+	}
+
 	notifier := service.NewNotifier(nil, repo, domain.SeverityError, nil, log)
 	notifier.NotifyEvent(context.Background(), device, evaluation.Events[0])
 	notifier.NotifyEvent(context.Background(), device, evaluation.Events[0])
@@ -405,6 +499,71 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}
 	if !fireRaw.Data.Points[0].FlameDetected || fireRaw.Data.Points[0].SmokeLevel != 100 || fireRaw.Data.Points[3].SmokeLevel != 400 {
 		t.Fatalf("fire raw points=%+v", fireRaw.Data.Points)
+	}
+
+	var deviceTelList struct {
+		Data []struct {
+			FirmwareVersion   string    `json:"firmware_version"`
+			WifiRSSI          *int      `json:"wifi_rssi"`
+			BatteryVoltage    *float64  `json:"battery_voltage"`
+			BatteryPercentage *int      `json:"battery_percentage"`
+			RecordedAt        time.Time `json:"recorded_at"`
+		} `json:"data"`
+		Meta struct {
+			Page    int   `json:"page"`
+			PerPage int   `json:"per_page"`
+			Total   int64 `json:"total"`
+		} `json:"meta"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/device", token, nil, &deviceTelList)
+	if status != http.StatusOK || deviceTelList.Meta.Total != 3 || len(deviceTelList.Data) != 3 {
+		t.Fatalf("device telemetry list status=%d body=%+v", status, deviceTelList)
+	}
+	if deviceTelList.Data[0].FirmwareVersion != "1.4.0" || deviceTelList.Data[2].FirmwareVersion != "1.2.0" {
+		t.Fatalf("device telemetry order = %+v", deviceTelList.Data)
+	}
+	if deviceTelList.Data[0].WifiRSSI == nil || *deviceTelList.Data[0].WifiRSSI != -44 ||
+		deviceTelList.Data[0].BatteryVoltage == nil || *deviceTelList.Data[0].BatteryVoltage != 3.3 ||
+		deviceTelList.Data[0].BatteryPercentage == nil || *deviceTelList.Data[0].BatteryPercentage != 18 {
+		t.Fatalf("device telemetry latest values = %+v", deviceTelList.Data[0])
+	}
+
+	filterFrom := deviceTelBase.Format(time.RFC3339)
+	filterTo := deviceTelBase.Add(2 * time.Minute).Format(time.RFC3339)
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/device?from="+filterFrom+"&to="+filterTo, token, nil, &deviceTelList)
+	if status != http.StatusOK || deviceTelList.Meta.Total != 2 || len(deviceTelList.Data) != 2 {
+		t.Fatalf("device telemetry filtered status=%d body=%+v", status, deviceTelList)
+	}
+
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/device?page=2&per_page=2", token, nil, &deviceTelList)
+	if status != http.StatusOK || deviceTelList.Meta.Total != 3 || deviceTelList.Meta.Page != 2 ||
+		deviceTelList.Meta.PerPage != 2 || len(deviceTelList.Data) != 1 {
+		t.Fatalf("device telemetry page status=%d body=%+v", status, deviceTelList)
+	}
+
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/device?from=bukan-waktu", token, nil, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("device telemetry invalid from status=%d", status)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/UNKNOWN-DEVICE/telemetry/device", token, nil, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("device telemetry unknown device status=%d", status)
+	}
+
+	var latestWithDevice struct {
+		Data struct {
+			DeviceTelemetry *struct {
+				FirmwareVersion string `json:"firmware_version"`
+			} `json:"device_telemetry"`
+		} `json:"data"`
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/telemetry/latest", token, nil, &latestWithDevice)
+	if status != http.StatusOK || latestWithDevice.Data.DeviceTelemetry == nil || latestWithDevice.Data.DeviceTelemetry.FirmwareVersion != "1.4.0" {
+		t.Fatalf("latest telemetry device status=%d body=%+v", status, latestWithDevice.Data)
+	}
+	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/devices/TEST-001/status", token, nil, &latestWithDevice)
+	if status != http.StatusOK || latestWithDevice.Data.DeviceTelemetry == nil || latestWithDevice.Data.DeviceTelemetry.FirmwareVersion != "1.4.0" {
+		t.Fatalf("status device telemetry status=%d body=%+v", status, latestWithDevice.Data)
 	}
 
 	nowTouch := time.Now().UTC()
@@ -778,6 +937,40 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("stored mcp command = %+v err=%v", storedCommand, err)
 	}
 
+	status, deviceTelCall := doMCP(t, srv.URL, petugasKey.Data.Token, 21, "tools/call", map[string]any{
+		"name": "list_device_telemetry", "arguments": map[string]any{"device_id": "TEST-001"},
+	})
+	if status != http.StatusOK || deviceTelCall.Error != nil {
+		t.Fatalf("mcp device telemetry status=%d error=%+v", status, deviceTelCall.Error)
+	}
+	var mcpDeviceTel struct {
+		Data []struct {
+			FirmwareVersion string `json:"firmware_version"`
+		} `json:"data"`
+		Meta struct {
+			Total int64 `json:"total"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(decodeMCPToolContent(t, deviceTelCall.Result), &mcpDeviceTel); err != nil ||
+		mcpDeviceTel.Meta.Total != 3 || len(mcpDeviceTel.Data) != 3 || mcpDeviceTel.Data[0].FirmwareVersion != "1.4.0" {
+		t.Fatalf("mcp device telemetry = %+v err=%v", mcpDeviceTel, err)
+	}
+
+	status, refreshCall := doMCP(t, srv.URL, petugasKey.Data.Token, 22, "tools/call", map[string]any{
+		"name": "refresh_device_telemetry", "arguments": map[string]any{"device_id": "TEST-001"},
+	})
+	if status != http.StatusOK || refreshCall.Error != nil {
+		t.Fatalf("mcp refresh telemetry status=%d error=%+v", status, refreshCall.Error)
+	}
+	var mcpRefresh struct {
+		Action string `json:"action"`
+		Origin string `json:"origin"`
+	}
+	if err := json.Unmarshal(decodeMCPToolContent(t, refreshCall.Result), &mcpRefresh); err != nil ||
+		mcpRefresh.Action != string(domain.ActionGetAllTelemetry) || mcpRefresh.Origin != string(domain.OriginMCP) {
+		t.Fatalf("mcp refresh command = %+v err=%v", mcpRefresh, err)
+	}
+
 	mcpEvent, err := risk.EmitDeviceEvent(context.Background(), device, domain.EventSmokeDetected, "mcp integration", "Smoke detected during MCP test")
 	if err != nil || mcpEvent == nil {
 		t.Fatalf("emit mcp event event=%+v err=%v", mcpEvent, err)
@@ -900,7 +1093,7 @@ type mcpRPCResponse struct {
 	ID      json.RawMessage `json:"id"`
 	Result  json.RawMessage `json:"result"`
 	Error   *struct {
-		Code    int    `json:"code"`
+		Code    any    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 }

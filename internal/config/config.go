@@ -48,11 +48,15 @@ type Config struct {
 	SeedDeviceID        string
 	SeedDeviceName      string
 
-	TemperatureHighC float64
-	SoilDryADC       float64
-	SmokeLevelMax    int
-	EventCooldown    time.Duration
-	FireCooldown     time.Duration
+	TemperatureHighC  float64
+	SoilDryADC        float64
+	SmokeLevelMax     int
+	BatteryLowPercent int
+	EventCooldown     time.Duration
+	FireCooldown      time.Duration
+
+	TelemetryRefreshTimeout  time.Duration
+	TelemetryRefreshThrottle time.Duration
 
 	AutoPumpEnabled  bool
 	AutoPumpDuration time.Duration
@@ -125,11 +129,15 @@ func load(requireJWT bool) (*Config, error) {
 		SeedDeviceID:        env("SEED_DEVICE_ID", "FFF-VIRTUAL-DEVICE"),
 		SeedDeviceName:      env("SEED_DEVICE_NAME", "Simulator Device"),
 
-		TemperatureHighC: envFloat("THRESHOLD_TEMPERATURE_HIGH_C", 40),
-		SoilDryADC:       envFloat("THRESHOLD_SOIL_DRY_ADC", 300),
-		SmokeLevelMax:    envInt("THRESHOLD_SMOKE_LEVEL", 500),
-		EventCooldown:    envDuration("EVENT_COOLDOWN", 5*time.Minute),
-		FireCooldown:     envDuration("FIRE_EVENT_COOLDOWN", time.Minute),
+		TemperatureHighC:  envFloat("THRESHOLD_TEMPERATURE_HIGH_C", 40),
+		SoilDryADC:        envFloat("THRESHOLD_SOIL_DRY_ADC", 300),
+		SmokeLevelMax:     envInt("THRESHOLD_SMOKE_LEVEL", 500),
+		BatteryLowPercent: envInt("THRESHOLD_BATTERY_LOW_PERCENT", 20),
+		EventCooldown:     envDuration("EVENT_COOLDOWN", 5*time.Minute),
+		FireCooldown:      envDuration("FIRE_EVENT_COOLDOWN", time.Minute),
+
+		TelemetryRefreshTimeout:  envDuration("TELEMETRY_REFRESH_TIMEOUT", 5*time.Second),
+		TelemetryRefreshThrottle: envDuration("TELEMETRY_REFRESH_THROTTLE", 30*time.Second),
 
 		AutoPumpEnabled:  envBool("AUTO_PUMP_ENABLED", false),
 		AutoPumpDuration: envDuration("AUTO_PUMP_DURATION", 30*time.Second),
@@ -147,7 +155,7 @@ func load(requireJWT bool) (*Config, error) {
 		FCMMinSeverity:     env("FCM_MIN_SEVERITY", "error"),
 		FCMEventTypes: envCSV(
 			"FCM_EVENT_TYPES",
-			"FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR",
+			"FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR,LOW_BATTERY",
 		),
 
 		MCPEnabled:         envBool("MCP_ENABLED", false),

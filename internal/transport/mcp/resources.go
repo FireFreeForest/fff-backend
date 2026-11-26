@@ -71,15 +71,16 @@ func registerResources(s *sdkmcp.Server, d Deps, role domain.UserRole) {
 		}
 		latest := latestTelemetry(ctx, d.Redis, d.Repo, device)
 		return jsonResource(uri, deviceStatusOutput{
-			Device:        device,
-			Status:        device.Status,
-			LastSeenAt:    device.LastSeenAt,
-			OnlineSince:   device.OnlineSince,
-			UptimeSeconds: device.UptimeSeconds(nowUTC()),
-			Environment:   latest.Environment,
-			Fire:          latest.Fire,
-			RiskLevel:     latest.RiskLevel,
-			ServerTime:    nowUTC(),
+			Device:          device,
+			Status:          device.Status,
+			LastSeenAt:      device.LastSeenAt,
+			OnlineSince:     device.OnlineSince,
+			UptimeSeconds:   device.UptimeSeconds(nowUTC()),
+			Environment:     latest.Environment,
+			Fire:            latest.Fire,
+			DeviceTelemetry: latest.DeviceTelemetry,
+			RiskLevel:       latest.RiskLevel,
+			ServerTime:      nowUTC(),
 		})
 	})
 }

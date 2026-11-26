@@ -180,8 +180,9 @@ Semua endpoint di bawah prefix `/api/v1`.
 | GET | `/devices/:deviceID/telemetry/environment/aggregate` | semua | Rata-rata atau raw lingkungan per interval |
 | GET | `/devices/:deviceID/telemetry/fire` | semua | Riwayat api/asap |
 | GET | `/devices/:deviceID/telemetry/fire/aggregate` | semua | Rata-rata atau raw api/asap per interval |
+| GET | `/devices/:deviceID/telemetry/device` | semua | Riwayat telemetri perangkat (firmware, WiFi, baterai) |
 | GET | `/devices/:deviceID/commands` | semua | Riwayat command |
-| POST | `/devices/:deviceID/commands` | admin, petugas | Kirim command pompa |
+| POST | `/devices/:deviceID/commands` | admin, petugas | Kirim command (`SET_PUMP` atau `GET_ALL_TELEMETRY`) |
 | GET | `/commands/:commandID` | semua | Detail command |
 | GET | `/events` | semua | Daftar event |
 | GET | `/events/:eventID` | semua | Detail event + preview linimasa |
@@ -290,6 +291,7 @@ Tool baca tersedia untuk semua role:
 - `list_devices`, `get_device`, `get_device_status`, `get_latest_telemetry`
 - `list_environment_telemetry`, `aggregate_environment_telemetry`
 - `list_fire_telemetry`, `aggregate_fire_telemetry`
+- `list_device_telemetry`
 - `list_events`, `get_event`, `list_event_timeline`
 - `list_commands`, `get_command`
 - `get_dashboard_summary`, `reverse_geocode`
@@ -300,6 +302,7 @@ Tool operasional:
 | --- | --- | --- |
 | `acknowledge_event` | admin, petugas | Event harus berstatus `active` |
 | `issue_pump_command` | admin, petugas | `SET_PUMP`; origin command `mcp`; mendukung `idempotency_key` |
+| `refresh_device_telemetry` | admin, petugas | `GET_ALL_TELEMETRY`; meminta perangkat mempublikasikan telemetri terbaru saat itu juga |
 | `resolve_event` | petugas | Sama seperti REST, resolve bukan wewenang admin |
 
 Command yang dikirim lewat MCP tercatat dengan `origin=mcp`, `issued_by` dari `actor_id`, dan audit metadata berisi `via=mcp`, `key_id`, serta `key_name`.
@@ -355,7 +358,7 @@ Binary stdio memakai `DB_DSN` dan `REDIS_ADDR` yang sama dengan API, menulis log
 }
 ```
 
-Tipe: `connected`, `telemetry.environment`, `telemetry.fire`, `event.created`, `event.resolved`, `risk.updated`, `device.status`, `command.issued`, `command.ack`, `command.timeout`.
+Tipe: `connected`, `telemetry.environment`, `telemetry.fire`, `telemetry.device`, `event.created`, `event.resolved`, `risk.updated`, `device.status`, `command.issued`, `command.ack`, `command.timeout`.
 
 Payload `event.created`, `event.resolved`, dan `event.updated` menyertakan `data.event.device` berisi data device lengkap, sama seperti response REST event.
 
@@ -369,6 +372,7 @@ Prefix default mengikuti website virtual device: `fire-free-forest`. Ubah lewat 
 | --- | --- | --- |
 | `fire-free-forest/{device_id}/telemetry/environment` | device -> backend | 1 |
 | `fire-free-forest/{device_id}/telemetry/fire` | device -> backend | 1 |
+| `fire-free-forest/{device_id}/telemetry/device` | device -> backend | 1 |
 | `fire-free-forest/{device_id}/event` | device -> backend | 1 |
 | `fire-free-forest/{device_id}/command` | backend -> device | 1 |
 | `fire-free-forest/{device_id}/command/ack` | device -> backend | 1 |
@@ -402,6 +406,20 @@ Telemetri api/asap:
 }
 ```
 
+Telemetri perangkat:
+
+```json
+{
+  "device_id": "FFF-VIRTUAL-DEVICE",
+  "firmware_version": "1.3.0",
+  "wifi": {"rssi": -49},
+  "battery": {"voltage": 3.456729, "percentage": 18},
+  "timestamp": "2026-01-01T10:00:00Z"
+}
+```
+
+`firmware_version` yang diterima ikut memperbarui `devices.firmware_version`. Nilai RSSI, tegangan, dan persentase baterai divalidasi (RSSI `-120..0` dBm, tegangan `0..6` V, persentase `0..100`); di luar rentang dianggap `SENSOR_ERROR`. Baterai di bawah `THRESHOLD_BATTERY_LOW_PERCENT` (default `20`, isi `0` untuk menonaktifkan) memicu event `LOW_BATTERY` yang otomatis resolved saat baterai kembali normal.
+
 Event dari perangkat:
 
 ```json
@@ -427,6 +445,8 @@ Command dari backend:
 }
 ```
 
+Selain `SET_PUMP`, backend mendukung action `GET_ALL_TELEMETRY` dengan `payload` kosong. Perangkat membalas `command/ack` setelah mempublikasikan ulang seluruh telemetri (environment, fire, device); ack inilah yang dipakai backend sebagai penanda telemetri terbaru sudah masuk.
+
 ACK perangkat:
 
 ```json
@@ -448,12 +468,15 @@ Catatan: `event_id` pada payload `/event` yang tidak kosong diabaikan untuk menc
 | `smoke_level >= THRESHOLD_SMOKE_LEVEL` | `SMOKE_DETECTED` | warning |
 | `temperature >= THRESHOLD_TEMPERATURE_HIGH_C` | `TEMPERATURE_HIGH` | warning |
 | `THRESHOLD_SOIL_DRY_ADC > 0` dan `soil_moisture < THRESHOLD_SOIL_DRY_ADC` | `SOIL_DRY` | warning |
+| `THRESHOLD_BATTERY_LOW_PERCENT > 0` dan `battery.percentage < THRESHOLD_BATTERY_LOW_PERCENT` | `LOW_BATTERY` | warning |
 | Perangkat tidak mengirim data > `DEVICE_OFFLINE_AFTER` | `DEVICE_OFFLINE` | warning |
 | Payload/sensor tidak valid | `SENSOR_ERROR` | error |
 
 Level risiko: `NORMAL`, `WASPADA` (1 warning), `BAHAYA` (>=2 warning), `DARURAT` (critical).
 
 Event aktif otomatis resolved bila kondisi sudah normal kembali. Cooldown mencegah duplikasi event.
+
+Setiap event menyertakan `metadata` berisi snapshot telemetri terbaru saat event dibuat: `temperature`, `humidity`, `soil_moisture`, `flame_detected`, `flame_level`, `smoke_level`, `pump`, `firmware_version`, `wifi_rssi`, `battery_voltage`, dan `battery_percentage`. Sebelum membuat event, backend mengirim `GET_ALL_TELEMETRY` dan menunggu ack perangkat (maksimal `TELEMETRY_REFRESH_TIMEOUT`, default 5 detik) agar snapshot benar-benar segar; bila ack tidak datang, metadata memakai snapshot cache terakhir. Field `metadata_source` menandai sumbernya (`command` atau `cache`) dan `command_id` menyimpan id command refresh. Refresh dibatasi per device (`TELEMETRY_REFRESH_THROTTLE`, default 30 detik) agar tidak membanjiri perangkat; `DEVICE_OFFLINE` selalu memakai snapshot cache karena perangkat tidak dapat menjawab.
 
 Auto pump backend **nonaktif secara default** karena website/perangkat sudah memiliki logika auto pump. Bila `AUTO_PUMP_ENABLED=true`, backend mengirim `SET_PUMP` sebagai fallback saat api terdeteksi atau `smoke_level >= THRESHOLD_SMOKE_LEVEL`. `SOIL_DRY` aktif secara default (`THRESHOLD_SOIL_DRY_ADC=300`); sesuaikan nilai tersebut dengan hasil kalibrasi sensor tanah.
 
@@ -496,7 +519,7 @@ Lihat `.env.example`. Variabel wajib:
 - `DB_DSN`
 - `JWT_SECRET` minimal 24 karakter
 
-Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`, `MCP_ENABLED`, `MCP_RATE_LIMIT_PER_MIN`.
+Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `THRESHOLD_BATTERY_LOW_PERCENT`, `TELEMETRY_REFRESH_TIMEOUT`, `TELEMETRY_REFRESH_THROTTLE`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`, `MCP_ENABLED`, `MCP_RATE_LIMIT_PER_MIN`.
 
 Untuk MCP: `MCP_ENABLED` (default `false`) mengaktifkan endpoint `/mcp`; `MCP_RATE_LIMIT_PER_MIN` membatasi request per key per menit (default `120`, `0` menonaktifkan). Binary stdio memakai `MCP_API_KEY`, atau fallback `MCP_ROLE` dan `MCP_ACTOR_ID`.
 
@@ -525,17 +548,17 @@ FCM hanya dipakai untuk push notification; data utama tetap disimpan di PostgreS
 FCM_CREDENTIALS_FILE=/app/secrets/service-account.json
 FCM_PROJECT_ID=<project-id>
 FCM_MIN_SEVERITY=error
-FCM_EVENT_TYPES=FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR
+FCM_EVENT_TYPES=FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR,LOW_BATTERY
 ```
 
-`FCM_MIN_SEVERITY` menerima `error`, `warning`, atau `critical`. Urutan severity di backend: `error` < `warning` < `critical`, jadi `FCM_MIN_SEVERITY=error` tetap mengirim semua event valid. `FCM_EVENT_TYPES` adalah allowlist event yang dikirim; kosongkan/tidak set untuk memakai enam event default. Event di luar allowlist atau di bawah `FCM_MIN_SEVERITY` tidak dikirim.
+`FCM_MIN_SEVERITY` menerima `error`, `warning`, atau `critical`. Urutan severity di backend: `error` < `warning` < `critical`, jadi `FCM_MIN_SEVERITY=error` tetap mengirim semua event valid. `FCM_EVENT_TYPES` adalah allowlist event yang dikirim; kosongkan/tidak set untuk memakai tujuh event default. Event di luar allowlist atau di bawah `FCM_MIN_SEVERITY` tidak dikirim.
 
 Kanal notifikasi Android yang dipakai worker:
 
 | Event | Channel | Sound |
 | --- | --- | --- |
 | `FIRE_DETECTED` | `fire_alerts_fire` | `notif_fire` |
-| `SMOKE_DETECTED`, `TEMPERATURE_HIGH`, `SOIL_DRY` | `fire_alerts_warning` | `notif_smoke` |
+| `SMOKE_DETECTED`, `TEMPERATURE_HIGH`, `SOIL_DRY`, `LOW_BATTERY` | `fire_alerts_warning` | `notif_smoke` |
 | `SENSOR_ERROR`, `DEVICE_OFFLINE` | `fire_alerts_error` | `notif_sensor_error` |
 
 `DEVICE_OFFLINE` sengaja memakai kanal dan suara error sensor agar notifikasi perangkat offline mudah dibedakan dari peringatan biasa.

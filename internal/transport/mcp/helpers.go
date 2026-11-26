@@ -153,9 +153,10 @@ func lookupDevice(ctx context.Context, repo *repository.Repository, deviceID str
 }
 
 type latestTelemetryResult struct {
-	Environment *domain.TelemetryEnvironment
-	Fire        *domain.TelemetryFire
-	RiskLevel   string
+	Environment     *domain.TelemetryEnvironment
+	Fire            *domain.TelemetryFire
+	DeviceTelemetry *domain.TelemetryDevice
+	RiskLevel       string
 }
 
 func latestTelemetry(ctx context.Context, rdb *goredis.Client, repo *repository.Repository, device *domain.Device) latestTelemetryResult {
@@ -174,6 +175,12 @@ func latestTelemetry(ctx context.Context, rdb *goredis.Client, repo *repository.
 					out.Fire = &fire
 				}
 			}
+			if raw, ok := vals["device"]; ok && raw != "" {
+				var dev domain.TelemetryDevice
+				if json.Unmarshal([]byte(raw), &dev) == nil {
+					out.DeviceTelemetry = &dev
+				}
+			}
 		}
 	}
 	if out.Environment == nil {
@@ -184,6 +191,11 @@ func latestTelemetry(ctx context.Context, rdb *goredis.Client, repo *repository.
 	if out.Fire == nil {
 		if fire, err := repo.LatestFire(ctx, device.ID); err == nil {
 			out.Fire = fire
+		}
+	}
+	if out.DeviceTelemetry == nil {
+		if dev, err := repo.LatestDeviceTelemetry(ctx, device.ID); err == nil {
+			out.DeviceTelemetry = dev
 		}
 	}
 	out.RiskLevel = "UNKNOWN"

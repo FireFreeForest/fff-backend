@@ -59,6 +59,7 @@ const (
 	EventTemperatureHigh EventType = "TEMPERATURE_HIGH"
 	EventSensorError     EventType = "SENSOR_ERROR"
 	EventDeviceOffline   EventType = "DEVICE_OFFLINE"
+	EventLowBattery      EventType = "LOW_BATTERY"
 )
 
 func (t EventType) Severity() Severity {
@@ -74,7 +75,7 @@ func (t EventType) Severity() Severity {
 
 func ValidEventType(t EventType) bool {
 	switch t {
-	case EventFireDetected, EventSmokeDetected, EventSoilDry, EventTemperatureHigh, EventSensorError, EventDeviceOffline:
+	case EventFireDetected, EventSmokeDetected, EventSoilDry, EventTemperatureHigh, EventSensorError, EventDeviceOffline, EventLowBattery:
 		return true
 	}
 	return false
@@ -101,7 +102,8 @@ const (
 type CommandAction string
 
 const (
-	ActionSetPump CommandAction = "SET_PUMP"
+	ActionSetPump         CommandAction = "SET_PUMP"
+	ActionGetAllTelemetry CommandAction = "GET_ALL_TELEMETRY"
 )
 
 type CommandOrigin string
@@ -196,6 +198,19 @@ type TelemetryFire struct {
 }
 
 func (TelemetryFire) TableName() string { return "telemetry_fire" }
+
+type TelemetryDevice struct {
+	ID                uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	DeviceID          uuid.UUID `gorm:"type:uuid;not null" json:"device_id"`
+	FirmwareVersion   string    `json:"firmware_version"`
+	WifiRSSI          *int      `json:"wifi_rssi,omitempty"`
+	BatteryVoltage    *float64  `json:"battery_voltage,omitempty"`
+	BatteryPercentage *int      `json:"battery_percentage,omitempty"`
+	RecordedAt        time.Time `json:"recorded_at"`
+	ReceivedAt        time.Time `json:"received_at"`
+}
+
+func (TelemetryDevice) TableName() string { return "telemetry_device" }
 
 type TelemetryEnvironmentBucket struct {
 	BucketStart  time.Time `json:"bucket_start"`

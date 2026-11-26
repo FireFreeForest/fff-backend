@@ -51,6 +51,19 @@ type commandMessage struct {
 	} `json:"payload"`
 }
 
+type devicePayload struct {
+	DeviceID        string `json:"device_id"`
+	FirmwareVersion string `json:"firmware_version"`
+	Wifi            struct {
+		RSSI int `json:"rssi"`
+	} `json:"wifi"`
+	Battery struct {
+		Voltage    float64 `json:"voltage"`
+		Percentage int     `json:"percentage"`
+	} `json:"battery"`
+	Timestamp string `json:"timestamp"`
+}
+
 type ackPayload struct {
 	DeviceID  string `json:"device_id"`
 	CommandID string `json:"command_id"`
@@ -73,11 +86,16 @@ func main() {
 	prefix := flag.String("prefix", envOr("MQTT_TOPIC_PREFIX", "fire-free-forest"), "mqtt topic prefix")
 	envInterval := flag.Duration("env-interval", 15*time.Minute, "environment telemetry interval")
 	fireInterval := flag.Duration("fire-interval", 5*time.Second, "fire telemetry interval")
+	deviceInterval := flag.Duration("device-interval", time.Minute, "device telemetry interval")
 	flame := flag.Bool("fire", false, "simulate flame detected")
 	smoke := flag.Int("smoke", 180, "baseline smoke level (0-1023)")
 	temp := flag.Float64("temp", 28, "baseline temperature celsius")
 	humidity := flag.Float64("humidity", 65, "baseline humidity percent")
 	soil := flag.Float64("soil", 640, "baseline soil sensor ADC (0-1023)")
+	firmware := flag.String("firmware", envOr("DEVICE_FIRMWARE", "1.3.0"), "reported firmware version")
+	rssi := flag.Int("rssi", -49, "baseline wifi RSSI (dBm)")
+	batteryVoltage := flag.Float64("battery-voltage", 3.45, "baseline battery voltage")
+	batteryPercentage := flag.Int("battery-percentage", 82, "baseline battery percentage (0-100)")
 	flag.Parse()
 	if *device == "" || *username == "" || *password == "" {
 		fmt.Fprintln(os.Stderr, "-device, shared MQTT username, and password are required; use make run-sim to load .env")
@@ -114,48 +132,6 @@ func main() {
 	commandTopic := fmt.Sprintf("%s/%s/command", *prefix, *device)
 	ackTopic := fmt.Sprintf("%s/%s/command/ack", *prefix, *device)
 
-	commandHandler := func(_ paho.Client, msg paho.Message) {
-		var cmd commandMessage
-		if err := json.Unmarshal(msg.Payload(), &cmd); err != nil {
-			log.Warn("invalid command payload", "error", err)
-			return
-		}
-		log.Info("command received", "command_id", cmd.CommandID, "action", cmd.Action, "state", cmd.Payload.State, "duration", cmd.Payload.Duration)
-		if cmd.Action != "SET_PUMP" {
-			publishAck(client, *device, ackTopic, cmd.CommandID, "failed", "unsupported action")
-			return
-		}
-		mu.Lock()
-		pumpOn = cmd.Payload.State
-		mu.Unlock()
-		message := "Pump deactivated"
-		if cmd.Payload.State {
-			message = "Pump activated"
-		}
-		publishAck(client, *device, ackTopic, cmd.CommandID, "success", message)
-		if cmd.Payload.State && cmd.Payload.Duration > 0 {
-			go func(commandID string, d int) {
-				time.Sleep(time.Duration(d) * time.Second)
-				mu.Lock()
-				pumpOn = false
-				mu.Unlock()
-				log.Info("pump auto-off after duration", "command_id", commandID, "duration", d)
-			}(cmd.CommandID, cmd.Payload.Duration)
-		}
-	}
-	if token := client.Subscribe(commandTopic, 1, commandHandler); !token.WaitTimeout(10*time.Second) || token.Error() != nil {
-		fmt.Fprintf(os.Stderr, "failed to subscribe %s: %v\n", commandTopic, token.Error())
-		os.Exit(1)
-	}
-
-	envTicker := time.NewTicker(*envInterval)
-	fireTicker := time.NewTicker(*fireInterval)
-	defer envTicker.Stop()
-	defer fireTicker.Stop()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
 	publishEnv := func() {
 		var p envPayload
 		p.DeviceID = *device
@@ -187,9 +163,72 @@ func main() {
 		p.Timestamp = time.Now().UTC().Format(time.RFC3339)
 		publishJSON(client, fmt.Sprintf("%s/%s/telemetry/fire", *prefix, *device), p, log)
 	}
+	publishDevice := func() {
+		var p devicePayload
+		p.DeviceID = *device
+		p.FirmwareVersion = *firmware
+		p.Wifi.RSSI = jitterInt(*rssi, 3)
+		p.Battery.Voltage = math.Round(jitter(*batteryVoltage, 0.05)*1000) / 1000
+		p.Battery.Percentage = clampInt(jitterInt(*batteryPercentage, 2), 0, 100)
+		p.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		publishJSON(client, fmt.Sprintf("%s/%s/telemetry/device", *prefix, *device), p, log)
+	}
+
+	commandHandler := func(_ paho.Client, msg paho.Message) {
+		var cmd commandMessage
+		if err := json.Unmarshal(msg.Payload(), &cmd); err != nil {
+			log.Warn("invalid command payload", "error", err)
+			return
+		}
+		log.Info("command received", "command_id", cmd.CommandID, "action", cmd.Action)
+		switch cmd.Action {
+		case "SET_PUMP":
+			mu.Lock()
+			pumpOn = cmd.Payload.State
+			mu.Unlock()
+			message := "Pump deactivated"
+			if cmd.Payload.State {
+				message = "Pump activated"
+			}
+			publishAck(client, *device, ackTopic, cmd.CommandID, "success", message)
+			if cmd.Payload.State && cmd.Payload.Duration > 0 {
+				go func(commandID string, d int) {
+					time.Sleep(time.Duration(d) * time.Second)
+					mu.Lock()
+					pumpOn = false
+					mu.Unlock()
+					log.Info("pump auto-off after duration", "command_id", commandID, "duration", d)
+				}(cmd.CommandID, cmd.Payload.Duration)
+			}
+		case "GET_ALL_TELEMETRY":
+			// Publish every telemetry stream before acking: the backend uses the
+			// ack as the completion signal for its event metadata snapshot.
+			publishEnv()
+			publishFire()
+			publishDevice()
+			publishAck(client, *device, ackTopic, cmd.CommandID, "success", "All telemetry published")
+		default:
+			publishAck(client, *device, ackTopic, cmd.CommandID, "failed", "unsupported action")
+		}
+	}
+	if token := client.Subscribe(commandTopic, 1, commandHandler); !token.WaitTimeout(10*time.Second) || token.Error() != nil {
+		fmt.Fprintf(os.Stderr, "failed to subscribe %s: %v\n", commandTopic, token.Error())
+		os.Exit(1)
+	}
+
+	envTicker := time.NewTicker(*envInterval)
+	fireTicker := time.NewTicker(*fireInterval)
+	deviceTicker := time.NewTicker(*deviceInterval)
+	defer envTicker.Stop()
+	defer fireTicker.Stop()
+	defer deviceTicker.Stop()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	publishEnv()
 	publishFire()
+	publishDevice()
 
 	for {
 		select {
@@ -200,6 +239,8 @@ func main() {
 			publishEnv()
 		case <-fireTicker.C:
 			publishFire()
+		case <-deviceTicker.C:
+			publishDevice()
 		}
 	}
 }

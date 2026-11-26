@@ -19,6 +19,14 @@ import (
 
 const maxPayloadBytes = 64 * 1024
 
+// commandAckKeyPrefix is used to fan out command acknowledgements to goroutines
+// waiting on a device response (e.g. the telemetry refresh before an event is
+// created). It must match the key the risk engine polls.
+const (
+	commandAckKeyPrefix = "ff:cmdack:"
+	commandAckTTL       = 5 * time.Minute
+)
+
 // maxADCReading is the highest value a 10-bit ADC can report. Some boards
 // report 1024 (full scale) instead of 1023, so accept up to 1024.
 const maxADCReading = 1024
@@ -61,11 +69,62 @@ type deviceEventPayload struct {
 	Timestamp string `json:"timestamp"`
 }
 
+type deviceTelemetryPayload struct {
+	DeviceID        string `json:"device_id"`
+	FirmwareVersion string `json:"firmware_version"`
+	Wifi            struct {
+		RSSI *int `json:"rssi"`
+	} `json:"wifi"`
+	Battery struct {
+		Voltage    *float64 `json:"voltage"`
+		Percentage *int     `json:"percentage"`
+	} `json:"battery"`
+	Timestamp string `json:"timestamp"`
+}
+
 type commandAckPayload struct {
 	DeviceID  string `json:"device_id"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
 	Message   string `json:"message"`
+}
+
+// deviceTelemetryIssue describes why a device telemetry payload was rejected
+// before persistence. Source maps to the SENSOR_ERROR metadata reason.
+type deviceTelemetryIssue struct {
+	Source  string
+	Message string
+}
+
+// validateDeviceTelemetry enforces the device telemetry contract: the payload
+// must belong to the topic it arrived on, and WiFi/battery values must be
+// physically plausible. It returns nil when the payload is acceptable.
+func validateDeviceTelemetry(topicDeviceID string, p deviceTelemetryPayload) *deviceTelemetryIssue {
+	if p.DeviceID != "" && p.DeviceID != topicDeviceID {
+		return &deviceTelemetryIssue{
+			Source:  "device_id_mismatch",
+			Message: "device_id pada payload telemetri perangkat tidak sesuai dengan topik MQTT.",
+		}
+	}
+	if p.Wifi.RSSI != nil && (*p.Wifi.RSSI < -120 || *p.Wifi.RSSI > 0) {
+		return &deviceTelemetryIssue{
+			Source:  "value_out_of_range",
+			Message: fmt.Sprintf("RSSI WiFi tidak valid: %d", *p.Wifi.RSSI),
+		}
+	}
+	if p.Battery.Percentage != nil && (*p.Battery.Percentage < 0 || *p.Battery.Percentage > 100) {
+		return &deviceTelemetryIssue{
+			Source:  "value_out_of_range",
+			Message: fmt.Sprintf("Persentase baterai tidak valid: %d", *p.Battery.Percentage),
+		}
+	}
+	if p.Battery.Voltage != nil && (*p.Battery.Voltage < 0 || *p.Battery.Voltage > 6) {
+		return &deviceTelemetryIssue{
+			Source:  "value_out_of_range",
+			Message: fmt.Sprintf("Tegangan baterai tidak valid: %.3f", *p.Battery.Voltage),
+		}
+	}
+	return nil
 }
 
 type processor func(ctx context.Context, deviceID string, payload []byte) error
@@ -120,6 +179,10 @@ func (w *Worker) handleFire(_ paho.Client, msg paho.Message) {
 
 func (w *Worker) handleDeviceEvent(_ paho.Client, msg paho.Message) {
 	w.process("event", msg, w.processDeviceEvent)
+}
+
+func (w *Worker) handleDeviceTelemetry(_ paho.Client, msg paho.Message) {
+	w.process("device", msg, w.processDeviceTelemetry)
 }
 
 func (w *Worker) handleCommandAck(_ paho.Client, msg paho.Message) {
@@ -281,6 +344,71 @@ func (w *Worker) processFire(ctx context.Context, topicDeviceID string, payload 
 	return nil
 }
 
+func (w *Worker) processDeviceTelemetry(ctx context.Context, topicDeviceID string, payload []byte) error {
+	var p deviceTelemetryPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		device, derr := w.resolveDevice(ctx, topicDeviceID)
+		if derr == nil {
+			w.emitSensorError(ctx, device, "payload_decode", "Payload telemetri perangkat bukan JSON yang valid.")
+		}
+		return nil
+	}
+
+	device, err := w.resolveDevice(ctx, topicDeviceID)
+	if err != nil {
+		return err
+	}
+	if issue := validateDeviceTelemetry(topicDeviceID, p); issue != nil {
+		w.emitSensorError(ctx, device, issue.Source, issue.Message)
+		return nil
+	}
+
+	now := time.Now().UTC()
+	firmware := strings.TrimSpace(p.FirmwareVersion)
+	tel := &domain.TelemetryDevice{
+		DeviceID:          device.ID,
+		FirmwareVersion:   firmware,
+		WifiRSSI:          p.Wifi.RSSI,
+		BatteryVoltage:    p.Battery.Voltage,
+		BatteryPercentage: p.Battery.Percentage,
+		RecordedAt:        parseRecordedAt(p.Timestamp),
+		ReceivedAt:        now,
+	}
+	if err := w.repo.CreateDeviceTelemetry(ctx, tel); err != nil {
+		return err
+	}
+	if firmware != "" && firmware != device.FirmwareVersion {
+		if err := w.repo.UpdateDeviceFields(ctx, device.ID, map[string]any{"firmware_version": firmware}); err != nil {
+			w.log.Warn("failed to update device firmware version", "device_id", device.DeviceID, "error", err)
+		} else {
+			device.FirmwareVersion = firmware
+		}
+	}
+	res, err := w.risk.RecordDevice(ctx, device, tel)
+	if err != nil {
+		w.log.Error("risk evaluation failed", "device_id", device.DeviceID, "error", err)
+	} else {
+		for _, ev := range res.Events {
+			w.log.Info("dispatching event to notifier",
+				"device_id", device.DeviceID,
+				"event_type", ev.EventType,
+				"severity", ev.Severity,
+			)
+			w.notifier.NotifyEvent(ctx, device, ev)
+		}
+	}
+	_ = realtime.Publish(ctx, w.rdb, realtime.Envelope{
+		Type:     "telemetry.device",
+		DeviceID: device.DeviceID,
+		Data: map[string]any{
+			"telemetry": tel,
+			"device_id": device.DeviceID,
+		},
+		Timestamp: now,
+	})
+	return nil
+}
+
 func (w *Worker) processDeviceEvent(ctx context.Context, topicDeviceID string, payload []byte) error {
 	var p deviceEventPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -352,6 +480,12 @@ func (w *Worker) processCommandAck(ctx context.Context, topicDeviceID string, pa
 	default:
 		w.log.Warn("unknown command ack status", "device_id", device.DeviceID, "status", p.Status)
 		return nil
+	}
+
+	// Signal any waiter (e.g. the telemetry refresh used before event creation)
+	// as soon as the device confirms, independent of the command row update.
+	if err := w.rdb.Set(ctx, commandAckKeyPrefix+p.CommandID, string(status), commandAckTTL).Err(); err != nil {
+		w.log.Warn("failed to signal command ack", "command_id", p.CommandID, "error", err)
 	}
 
 	cmd, updated, err := w.repo.AckCommand(ctx, device.ID, p.CommandID, status, p.Message)

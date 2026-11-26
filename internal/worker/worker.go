@@ -79,6 +79,7 @@ func (w *Worker) SubscribeAll() {
 	}{
 		{prefix + "/+/telemetry/environment", w.handleEnvironment},
 		{prefix + "/+/telemetry/fire", w.handleFire},
+		{prefix + "/+/telemetry/device", w.handleDeviceTelemetry},
 		{prefix + "/+/event", w.handleDeviceEvent},
 		{prefix + "/+/command/ack", w.handleCommandAck},
 	}
