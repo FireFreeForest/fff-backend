@@ -14,9 +14,7 @@ import (
 
 	"firefreeforest/backend/internal/domain"
 	"firefreeforest/backend/internal/observability"
-	"firefreeforest/backend/internal/realtime"
 	"firefreeforest/backend/internal/repository"
-	"firefreeforest/backend/internal/service"
 )
 
 const (
@@ -29,6 +27,7 @@ const (
 	maxRawRange          = 7 * 24 * time.Hour
 	maxAggregateBuckets  = 5000
 	bucketTimezone       = "Asia/Jakarta"
+	mcpReadOnlyRole      = "readonly"
 )
 
 type pageMeta struct {
@@ -99,7 +98,7 @@ func jsonResult(v any) (*sdkmcp.CallToolResult, any, error) {
 
 // instrument records Prometheus metrics for a tool call. It is intentionally
 // generic so every handler keeps its typed input.
-func instrument[In, Out any](role domain.UserRole, tool string, fn sdkmcp.ToolHandlerFor[In, Out]) sdkmcp.ToolHandlerFor[In, Out] {
+func instrument[In, Out any](tool string, fn sdkmcp.ToolHandlerFor[In, Out]) sdkmcp.ToolHandlerFor[In, Out] {
 	return func(ctx context.Context, req *sdkmcp.CallToolRequest, in In) (*sdkmcp.CallToolResult, Out, error) {
 		started := time.Now()
 		result, out, err := fn(ctx, req, in)
@@ -110,8 +109,8 @@ func instrument[In, Out any](role domain.UserRole, tool string, fn sdkmcp.ToolHa
 		case result != nil && result.IsError:
 			status = "tool_error"
 		}
-		observability.MCPToolCalls.WithLabelValues(tool, string(role), status).Inc()
-		observability.MCPToolDuration.WithLabelValues(tool, string(role)).Observe(time.Since(started).Seconds())
+		observability.MCPToolCalls.WithLabelValues(tool, mcpReadOnlyRole, status).Inc()
+		observability.MCPToolDuration.WithLabelValues(tool, mcpReadOnlyRole).Observe(time.Since(started).Seconds())
 		return result, out, err
 	}
 }
@@ -122,18 +121,6 @@ func readTool(name, description, title string) *sdkmcp.Tool {
 		Description: description,
 		Title:       title,
 		Annotations: &sdkmcp.ToolAnnotations{ReadOnlyHint: true},
-	}
-}
-
-func writeTool(name, description, title string, idempotent bool) *sdkmcp.Tool {
-	return &sdkmcp.Tool{
-		Name:        name,
-		Description: description,
-		Title:       title,
-		Annotations: &sdkmcp.ToolAnnotations{
-			ReadOnlyHint:   false,
-			IdempotentHint: idempotent,
-		},
 	}
 }
 
@@ -207,63 +194,6 @@ func latestTelemetry(ctx context.Context, rdb *goredis.Client, repo *repository.
 	return out
 }
 
-func auditMCP(ctx context.Context, repo *repository.Repository, principal *service.MCPPrincipal, action, entity, entityID string, meta map[string]any) {
-	merged := map[string]any{"via": "mcp"}
-	if principal != nil {
-		merged["key_id"] = principal.KeyID.String()
-		merged["key_name"] = principal.KeyName
-	}
-	for k, v := range meta {
-		merged[k] = v
-	}
-	raw, err := json.Marshal(merged)
-	if err != nil {
-		return
-	}
-	var actor *uuid.UUID
-	if principal != nil {
-		actor = principal.ActorID
-	}
-	if err := repo.CreateAuditLog(ctx, &domain.AuditLog{
-		ActorID:   actor,
-		Action:    action,
-		Entity:    entity,
-		EntityID:  entityID,
-		Metadata:  raw,
-		IP:        "mcp",
-		CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		// Auditing must not fail the operation; the caller logs tool errors.
-		_ = err
-	}
-}
-
-func publishEventUpdate(ctx context.Context, rdb *goredis.Client, repo *repository.Repository, eventID uuid.UUID, eventType string) {
-	if rdb == nil {
-		return
-	}
-	event, err := repo.GetEvent(ctx, eventID)
-	if err != nil {
-		return
-	}
-	device := event.Device
-	if device == nil {
-		device, err = repo.GetDeviceByID(ctx, event.DeviceID)
-		if err != nil {
-			return
-		}
-		event.Device = device
-	}
-	_ = realtime.Publish(ctx, rdb, realtime.Envelope{
-		Type:     eventType,
-		DeviceID: device.DeviceID,
-		Data: map[string]any{
-			"event":     event,
-			"device_id": device.DeviceID,
-		},
-	})
-}
-
 // ---------------------------------------------------------------- events
 
 type timelineActor struct {
@@ -315,10 +245,4 @@ type eventDetail struct {
 	TimelinePreview []timelineItem `json:"timeline_preview"`
 	TimelineTotal   int64          `json:"timeline_total"`
 	TimelineHasMore bool           `json:"timeline_has_more"`
-}
-
-// ---------------------------------------------------------------- commands
-
-func idempotencyKey(keyID uuid.UUID, key string) string {
-	return fmt.Sprintf("ff:mcp:idem:%s:%s", keyID.String(), key)
 }

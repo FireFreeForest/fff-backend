@@ -46,8 +46,8 @@ func TestDocsRoutes(t *testing.T) {
 		if !strings.Contains(body, "/users") {
 			t.Fatal("spec tidak memuat endpoint /users")
 		}
-		if !strings.Contains(body, "/admin/mcp-keys") {
-			t.Fatal("spec tidak memuat endpoint /admin/mcp-keys")
+		if strings.Contains(body, "/admin/mcp-keys") {
+			t.Fatal("spec tidak boleh memuat endpoint /admin/mcp-keys")
 		}
 	})
 }

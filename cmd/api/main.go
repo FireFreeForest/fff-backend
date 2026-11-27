@@ -74,17 +74,8 @@ func run() error {
 	}
 	commands := service.NewCommandService(repo, rdb, log, cfg.AutoPumpMax, cfg.MQTTTopicPrefix)
 	geocoder := service.NewGeocoder(rdb, cfg.GeocodeBaseURL, cfg.GeocodeUserAgent, cfg.GeocodeCacheTTL, log)
-	mcpKeys := service.NewMCPKeyService(repo)
-	if cfg.MCPEnabled {
-		activeKeys, err := repo.CountActiveMCPKeys(ctx)
-		switch {
-		case err != nil:
-			log.Warn("could not count mcp api keys", "error", err)
-		case activeKeys == 0:
-			log.Warn("mcp http endpoint enabled but no active api keys exist", "path", "/mcp")
-		default:
-			log.Info("mcp http endpoint enabled", "path", "/mcp", "active_keys", activeKeys, "rate_limit_per_min", cfg.MCPRateLimitPerMin)
-		}
+	if cfg.MCPAPIKey != "" {
+		log.Info("mcp http endpoint enabled (read-only)", "path", "/mcp", "rate_limit_per_min", cfg.MCPRateLimitPerMin)
 	}
 
 	hub := ws.NewHub(log)
@@ -97,7 +88,6 @@ func run() error {
 		Auth:     auth,
 		Commands: commands,
 		Geocoder: geocoder,
-		Keys:     mcpKeys,
 		Hub:      hub,
 		Redis:    rdb,
 		Logger:   log,

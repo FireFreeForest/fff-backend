@@ -42,7 +42,7 @@ func TestOpenAPISpecIsValidYAML(t *testing.T) {
 	}
 }
 
-func TestOpenAPIHasMCPEndpoints(t *testing.T) {
+func TestOpenAPIHasNoMCPKeyManagement(t *testing.T) {
 	spec := loadSpec(t)
 	paths, _ := spec["paths"].(map[string]any)
 	for _, path := range []string{
@@ -50,21 +50,21 @@ func TestOpenAPIHasMCPEndpoints(t *testing.T) {
 		"/admin/mcp-keys/{keyID}",
 		"/admin/mcp-keys/{keyID}/rotate",
 	} {
-		if _, ok := paths[path]; !ok {
-			t.Fatalf("path %q missing", path)
+		if _, ok := paths[path]; ok {
+			t.Fatalf("path %q must be removed", path)
 		}
 	}
 
 	components, _ := spec["components"].(map[string]any)
 	schemas, _ := components["schemas"].(map[string]any)
 	for _, name := range []string{"MCPAPIKey", "MCPAPIKeyCreated", "MCPAPIKeyRotated"} {
-		if _, ok := schemas[name]; !ok {
-			t.Fatalf("schema %q missing", name)
+		if _, ok := schemas[name]; ok {
+			t.Fatalf("schema %q must be removed", name)
 		}
 	}
 	parameters, _ := components["parameters"].(map[string]any)
-	if _, ok := parameters["MCPKeyID"]; !ok {
-		t.Fatal("parameter MCPKeyID missing")
+	if _, ok := parameters["MCPKeyID"]; ok {
+		t.Fatal("parameter MCPKeyID must be removed")
 	}
 }
 

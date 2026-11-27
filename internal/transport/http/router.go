@@ -24,7 +24,6 @@ type Deps struct {
 	Auth     *service.AuthService
 	Commands *service.CommandService
 	Geocoder *service.Geocoder
-	Keys     *service.MCPKeyService
 	Hub      *ws.Hub
 	Redis    *goredis.Client
 	Logger   *slog.Logger
@@ -36,7 +35,6 @@ type Handler struct {
 	auth     *service.AuthService
 	commands *service.CommandService
 	geocoder *service.Geocoder
-	keys     *service.MCPKeyService
 	hub      *ws.Hub
 	rdb      *goredis.Client
 	log      *slog.Logger
@@ -52,7 +50,6 @@ func NewRouter(d Deps) *gin.Engine {
 		auth:     d.Auth,
 		commands: d.Commands,
 		geocoder: d.Geocoder,
-		keys:     d.Keys,
 		hub:      d.Hub,
 		rdb:      d.Redis,
 		log:      d.Logger,
@@ -66,16 +63,14 @@ func NewRouter(d Deps) *gin.Engine {
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	registerDocsRoutes(r)
 
-	if d.Config.MCPEnabled {
+	if d.Config.MCPAPIKey != "" {
 		mcpHandler := mcptransport.NewHTTPHandler(mcptransport.Deps{
 			Config:   d.Config,
 			Repo:     d.Repo,
-			Commands: d.Commands,
 			Geocoder: d.Geocoder,
-			Keys:     d.Keys,
 			Redis:    d.Redis,
 			Logger:   d.Logger,
-		}, d.Config.MCPRateLimitPerMin)
+		}, d.Config.MCPAPIKey, d.Config.MCPRateLimitPerMin)
 		r.Any("/mcp", gin.WrapH(mcpHandler))
 	}
 
@@ -126,13 +121,6 @@ func NewRouter(d Deps) *gin.Engine {
 	admin.GET("/users", h.listUsers)
 	admin.POST("/users", h.createUser)
 	admin.PATCH("/users/:userID", h.updateUser)
-
-	mcpKeys := secured.Group("/admin")
-	mcpKeys.Use(requireRoles(domain.RoleAdmin))
-	mcpKeys.GET("/mcp-keys", h.listMCPKeys)
-	mcpKeys.POST("/mcp-keys", h.createMCPKey)
-	mcpKeys.PATCH("/mcp-keys/:keyID", h.updateMCPKey)
-	mcpKeys.POST("/mcp-keys/:keyID/rotate", h.rotateMCPKey)
 
 	return r
 }

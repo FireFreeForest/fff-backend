@@ -6,11 +6,9 @@ import (
 	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"firefreeforest/backend/internal/domain"
 )
 
-func registerPrompts(s *sdkmcp.Server, _ Deps, role domain.UserRole) {
+func registerPrompts(s *sdkmcp.Server, _ Deps) {
 	s.AddPrompt(&sdkmcp.Prompt{
 		Name:        "triage_events",
 		Description: "Susun prioritas penanganan event aktif berdasarkan severity, umur event, dan kondisi perangkat.",
@@ -63,30 +61,6 @@ Panggil list_devices dan identifikasi perangkat yang offline atau tidak mengirim
 Susun briefing singkat berisi: jumlah perangkat online/offline, distribusi risk, event aktif per severity, daftar event paling mendesak, dan hal yang perlu dipantau pada shift berikutnya.
 Jangan mengarang data yang tidak dikembalikan tool.`), nil
 	})
-
-	if role == domain.RolePetugas || role == domain.RoleAdmin {
-		s.AddPrompt(&sdkmcp.Prompt{
-			Name:        "pump_command_checklist",
-			Description: "Checklist sebelum mengirim perintah pompa ke perangkat.",
-			Arguments: []*sdkmcp.PromptArgument{{
-				Name:        "device_id",
-				Description: "device_id publik perangkat.",
-				Required:    true,
-			}},
-		}, func(_ context.Context, req *sdkmcp.GetPromptRequest) (*sdkmcp.GetPromptResult, error) {
-			deviceID := strings.TrimSpace(req.Params.Arguments["device_id"])
-			if deviceID == "" {
-				return nil, fmt.Errorf("argumen device_id wajib diisi")
-			}
-			return promptResult("Checklist perintah pompa", fmt.Sprintf(`Sebelum mengirim perintah pompa ke %s, lakukan pemeriksaan berikut:
-1. get_device dan get_device_status untuk memastikan perangkat online.
-2. get_latest_telemetry untuk melihat kondisi terbaru.
-3. list_events dengan device_id=%s dan status=active untuk memastikan konteks kebakaran.
-4. list_commands dengan device_id=%s untuk melihat command terakhir dan menghindari pengulangan.
-Jika perangkat offline atau data tidak konsisten, jangan kirim command; laporkan alasannya.
-Jika aman, gunakan issue_pump_command dengan state dan duration yang jelas, serta idempotency_key unik.`, deviceID, deviceID, deviceID)), nil
-		})
-	}
 }
 
 func promptResult(description, text string) *sdkmcp.GetPromptResult {

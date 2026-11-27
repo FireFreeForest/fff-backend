@@ -28,6 +28,8 @@ import (
 	"firefreeforest/backend/internal/transport/ws"
 )
 
+const mcpIntegrationToken = "integration-mcp-token"
+
 func TestAPIFlowIntegration(t *testing.T) {
 	dsn := os.Getenv("TEST_DB_DSN")
 	if dsn == "" {
@@ -42,7 +44,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 	t.Setenv("SEED_ADMIN_EMAIL", "admin@fff.local")
 	t.Setenv("SEED_ADMIN_PASSWORD", "admin12345")
 	t.Setenv("SEED_DEVICE_ID", "")
-	t.Setenv("MCP_ENABLED", "true")
+	t.Setenv("MCP_API_KEY", mcpIntegrationToken)
 	t.Setenv("MCP_RATE_LIMIT_PER_MIN", "1000")
 	// Disable the telemetry refresh command so event creation does not block
 	// waiting for a device ack that no broker will deliver in this test.
@@ -56,7 +58,7 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("open postgres: %v", err)
 	}
 	if err := db.Exec(`TRUNCATE event_timeline, audit_logs, outbox, commands, events, telemetry_fire,
-		telemetry_environment, telemetry_device, devices, refresh_tokens, push_tokens, mcp_api_keys, users RESTART IDENTITY CASCADE`).Error; err != nil {
+		telemetry_environment, telemetry_device, devices, refresh_tokens, push_tokens, users RESTART IDENTITY CASCADE`).Error; err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 
@@ -87,7 +89,6 @@ func TestAPIFlowIntegration(t *testing.T) {
 		Repo:     repo,
 		Auth:     auth,
 		Commands: commands,
-		Keys:     service.NewMCPKeyService(repo),
 		Hub:      hub,
 		Redis:    rdb,
 		Logger:   log,
@@ -776,73 +777,14 @@ func TestAPIFlowIntegration(t *testing.T) {
 	}
 
 	// ---------------------------------------------------------------- MCP
-	var petugasKey struct {
-		Data struct {
-			ID        string `json:"id"`
-			KeyPrefix string `json:"key_prefix"`
-			Role      string `json:"role"`
-			Token     string `json:"token"`
-		} `json:"data"`
-	}
-	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys", token, map[string]any{
-		"name": "integration petugas", "role": "petugas", "actor_id": petugasUser.Data.ID,
-	}, &petugasKey)
-	if status != http.StatusCreated || petugasKey.Data.ID == "" || petugasKey.Data.Role != "petugas" || !strings.HasPrefix(petugasKey.Data.Token, "mcp_") {
-		t.Fatalf("create petugas mcp key status=%d body=%+v", status, petugasKey)
-	}
-
-	var viewerKey struct {
-		Data struct {
-			ID    string `json:"id"`
-			Token string `json:"token"`
-		} `json:"data"`
-	}
-	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys", token, map[string]any{
-		"name": "integration viewer", "role": "viewer",
-	}, &viewerKey)
-	if status != http.StatusCreated || viewerKey.Data.Token == "" {
-		t.Fatalf("create viewer mcp key status=%d body=%+v", status, viewerKey)
-	}
-
-	var adminKey struct {
-		Data struct {
-			Token string `json:"token"`
-		} `json:"data"`
-	}
-	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys", token, map[string]any{
-		"name": "integration admin", "role": "admin",
-	}, &adminKey)
-	if status != http.StatusCreated || adminKey.Data.Token == "" {
-		t.Fatalf("create admin mcp key status=%d body=%+v", status, adminKey)
-	}
-
-	var keyList struct {
-		Data []struct {
-			ID    string `json:"id"`
-			Token string `json:"token"`
-		} `json:"data"`
-		Meta struct {
-			Total int64 `json:"total"`
-		} `json:"meta"`
-	}
-	status = doJSON(t, http.MethodGet, srv.URL+"/api/v1/admin/mcp-keys", token, nil, &keyList)
-	if status != http.StatusOK || keyList.Meta.Total != 3 || len(keyList.Data) != 3 {
-		t.Fatalf("list mcp keys status=%d body=%+v", status, keyList)
-	}
-	for _, key := range keyList.Data {
-		if key.Token != "" {
-			t.Fatal("list mcp keys must not expose tokens")
-		}
-	}
-
 	if status, _ := doMCP(t, srv.URL, "", 1, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
 		t.Fatalf("mcp without token status=%d", status)
 	}
-	if status, _ := doMCP(t, srv.URL, "mcp_000000000000_invalid", 1, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
+	if status, _ := doMCP(t, srv.URL, "wrong-token", 1, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
 		t.Fatalf("mcp invalid token status=%d", status)
 	}
 
-	status, initResp := doMCP(t, srv.URL, viewerKey.Data.Token, 1, "initialize", mcpInitializeParams())
+	status, initResp := doMCP(t, srv.URL, mcpIntegrationToken, 1, "initialize", mcpInitializeParams())
 	if status != http.StatusOK || initResp.Error != nil {
 		t.Fatalf("mcp initialize status=%d error=%+v", status, initResp.Error)
 	}
@@ -856,28 +798,19 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("mcp initialize result=%s err=%v", initResp.Result, err)
 	}
 
-	viewerTools := mcpToolNames(t, srv.URL, viewerKey.Data.Token)
-	if !viewerTools["list_devices"] || !viewerTools["get_dashboard_summary"] {
-		t.Fatalf("viewer tools = %+v", viewerTools)
+	tools := mcpToolNames(t, srv.URL, mcpIntegrationToken)
+	for _, name := range []string{"list_devices", "get_dashboard_summary", "list_events"} {
+		if !tools[name] {
+			t.Fatalf("read tool %q missing: %+v", name, tools)
+		}
 	}
-	if viewerTools["issue_pump_command"] || viewerTools["acknowledge_event"] || viewerTools["resolve_event"] {
-		t.Fatalf("viewer must not see operational tools: %+v", viewerTools)
-	}
-
-	petugasTools := mcpToolNames(t, srv.URL, petugasKey.Data.Token)
-	if !petugasTools["issue_pump_command"] || !petugasTools["acknowledge_event"] || !petugasTools["resolve_event"] {
-		t.Fatalf("petugas tools = %+v", petugasTools)
-	}
-
-	adminTools := mcpToolNames(t, srv.URL, adminKey.Data.Token)
-	if !adminTools["issue_pump_command"] || !adminTools["acknowledge_event"] {
-		t.Fatalf("admin tools = %+v", adminTools)
-	}
-	if adminTools["resolve_event"] {
-		t.Fatalf("admin must not see resolve_event: %+v", adminTools)
+	for _, name := range []string{"acknowledge_event", "resolve_event", "issue_pump_command", "refresh_device_telemetry"} {
+		if tools[name] {
+			t.Fatalf("write tool %q must not be exposed", name)
+		}
 	}
 
-	status, dashboardCall := doMCP(t, srv.URL, viewerKey.Data.Token, 2, "tools/call", map[string]any{
+	status, dashboardCall := doMCP(t, srv.URL, mcpIntegrationToken, 2, "tools/call", map[string]any{
 		"name": "get_dashboard_summary", "arguments": map[string]any{},
 	})
 	if status != http.StatusOK || dashboardCall.Error != nil {
@@ -902,151 +835,11 @@ func TestAPIFlowIntegration(t *testing.T) {
 		t.Fatalf("mcp dashboard data=%s err=%v", dashboardContent.Content[0].Text, err)
 	}
 
-	issueArgs := map[string]any{
-		"device_id": "TEST-001", "state": true, "duration": 30, "idempotency_key": "mcp-int-1",
-	}
-	status, issueCall := doMCP(t, srv.URL, petugasKey.Data.Token, 3, "tools/call", map[string]any{
-		"name": "issue_pump_command", "arguments": issueArgs,
+	status, writeCall := doMCP(t, srv.URL, mcpIntegrationToken, 3, "tools/call", map[string]any{
+		"name": "issue_pump_command", "arguments": map[string]any{"device_id": "TEST-001", "state": true},
 	})
-	if status != http.StatusOK || issueCall.Error != nil {
-		t.Fatalf("mcp issue pump status=%d error=%+v", status, issueCall.Error)
-	}
-	issuedMCP := decodeMCPToolContent(t, issueCall.Result)
-	var mcpCommand struct {
-		CommandID string `json:"command_id"`
-		Origin    string `json:"origin"`
-		Status    string `json:"status"`
-	}
-	if err := json.Unmarshal(issuedMCP, &mcpCommand); err != nil || mcpCommand.CommandID == "" || mcpCommand.Origin != string(domain.OriginMCP) {
-		t.Fatalf("mcp command = %s err=%v", issuedMCP, err)
-	}
-	status, repeatedCall := doMCP(t, srv.URL, petugasKey.Data.Token, 4, "tools/call", map[string]any{
-		"name": "issue_pump_command", "arguments": issueArgs,
-	})
-	if status != http.StatusOK || repeatedCall.Error != nil {
-		t.Fatalf("mcp repeated pump status=%d error=%+v", status, repeatedCall.Error)
-	}
-	var repeatedCommand struct {
-		CommandID string `json:"command_id"`
-	}
-	if err := json.Unmarshal(decodeMCPToolContent(t, repeatedCall.Result), &repeatedCommand); err != nil || repeatedCommand.CommandID != mcpCommand.CommandID {
-		t.Fatalf("idempotent command = %q, want %q (err=%v)", repeatedCommand.CommandID, mcpCommand.CommandID, err)
-	}
-	storedCommand, err := repo.GetCommandByCommandID(context.Background(), mcpCommand.CommandID)
-	if err != nil || storedCommand.Origin != domain.OriginMCP || storedCommand.IssuedBy == nil || storedCommand.IssuedBy.String() != petugasUser.Data.ID {
-		t.Fatalf("stored mcp command = %+v err=%v", storedCommand, err)
-	}
-
-	status, deviceTelCall := doMCP(t, srv.URL, petugasKey.Data.Token, 21, "tools/call", map[string]any{
-		"name": "list_device_telemetry", "arguments": map[string]any{"device_id": "TEST-001"},
-	})
-	if status != http.StatusOK || deviceTelCall.Error != nil {
-		t.Fatalf("mcp device telemetry status=%d error=%+v", status, deviceTelCall.Error)
-	}
-	var mcpDeviceTel struct {
-		Data []struct {
-			FirmwareVersion string `json:"firmware_version"`
-		} `json:"data"`
-		Meta struct {
-			Total int64 `json:"total"`
-		} `json:"meta"`
-	}
-	if err := json.Unmarshal(decodeMCPToolContent(t, deviceTelCall.Result), &mcpDeviceTel); err != nil ||
-		mcpDeviceTel.Meta.Total != 3 || len(mcpDeviceTel.Data) != 3 || mcpDeviceTel.Data[0].FirmwareVersion != "1.4.0" {
-		t.Fatalf("mcp device telemetry = %+v err=%v", mcpDeviceTel, err)
-	}
-
-	status, refreshCall := doMCP(t, srv.URL, petugasKey.Data.Token, 22, "tools/call", map[string]any{
-		"name": "refresh_device_telemetry", "arguments": map[string]any{"device_id": "TEST-001"},
-	})
-	if status != http.StatusOK || refreshCall.Error != nil {
-		t.Fatalf("mcp refresh telemetry status=%d error=%+v", status, refreshCall.Error)
-	}
-	var mcpRefresh struct {
-		Action string `json:"action"`
-		Origin string `json:"origin"`
-	}
-	if err := json.Unmarshal(decodeMCPToolContent(t, refreshCall.Result), &mcpRefresh); err != nil ||
-		mcpRefresh.Action != string(domain.ActionGetAllTelemetry) || mcpRefresh.Origin != string(domain.OriginMCP) {
-		t.Fatalf("mcp refresh command = %+v err=%v", mcpRefresh, err)
-	}
-
-	mcpEvent, err := risk.EmitDeviceEvent(context.Background(), device, domain.EventSmokeDetected, "mcp integration", "Smoke detected during MCP test")
-	if err != nil || mcpEvent == nil {
-		t.Fatalf("emit mcp event event=%+v err=%v", mcpEvent, err)
-	}
-	status, ackCall := doMCP(t, srv.URL, petugasKey.Data.Token, 5, "tools/call", map[string]any{
-		"name": "acknowledge_event", "arguments": map[string]any{"event_id": mcpEvent.ID.String()},
-	})
-	if status != http.StatusOK || ackCall.Error != nil {
-		t.Fatalf("mcp ack status=%d error=%+v", status, ackCall.Error)
-	}
-	var ackEvent struct {
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal(decodeMCPToolContent(t, ackCall.Result), &ackEvent); err != nil || ackEvent.Status != string(domain.EventAcknowledged) {
-		t.Fatalf("mcp ack event = %+v err=%v", ackEvent, err)
-	}
-
-	status, resolveCall := doMCP(t, srv.URL, adminKey.Data.Token, 6, "tools/call", map[string]any{
-		"name": "resolve_event", "arguments": map[string]any{"event_id": mcpEvent.ID.String()},
-	})
-	if status == http.StatusOK && resolveCall.Error == nil {
-		t.Fatal("admin must not be able to resolve events through MCP")
-	}
-
-	status, resolveCall = doMCP(t, srv.URL, petugasKey.Data.Token, 7, "tools/call", map[string]any{
-		"name": "resolve_event", "arguments": map[string]any{"event_id": mcpEvent.ID.String()},
-	})
-	if status != http.StatusOK || resolveCall.Error != nil {
-		t.Fatalf("mcp resolve status=%d error=%+v", status, resolveCall.Error)
-	}
-	var resolvedEvent struct {
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal(decodeMCPToolContent(t, resolveCall.Result), &resolvedEvent); err != nil || resolvedEvent.Status != string(domain.EventResolved) {
-		t.Fatalf("mcp resolved event = %+v err=%v", resolvedEvent, err)
-	}
-
-	var rotated struct {
-		Data struct {
-			Key struct {
-				ID    string `json:"id"`
-				Token string `json:"token"`
-			} `json:"key"`
-			Previous struct {
-				ID       string `json:"id"`
-				IsActive bool   `json:"is_active"`
-			} `json:"previous"`
-		} `json:"data"`
-	}
-	status = doJSON(t, http.MethodPost, srv.URL+"/api/v1/admin/mcp-keys/"+petugasKey.Data.ID+"/rotate", token, map[string]any{
-		"grace_seconds": 0,
-	}, &rotated)
-	if status != http.StatusOK || rotated.Data.Key.ID == "" || rotated.Data.Key.Token == "" || rotated.Data.Previous.ID != petugasKey.Data.ID || rotated.Data.Previous.IsActive {
-		t.Fatalf("rotate mcp key status=%d body=%+v", status, rotated)
-	}
-	if status, _ := doMCP(t, srv.URL, petugasKey.Data.Token, 8, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
-		t.Fatalf("rotated old key status=%d, want 401", status)
-	}
-	if status, resp := doMCP(t, srv.URL, rotated.Data.Key.Token, 8, "initialize", mcpInitializeParams()); status != http.StatusOK || resp.Error != nil {
-		t.Fatalf("rotated new key status=%d error=%+v", status, resp.Error)
-	}
-
-	status = doJSON(t, http.MethodPatch, srv.URL+"/api/v1/admin/mcp-keys/"+rotated.Data.Key.ID, token, map[string]any{
-		"role": "viewer",
-	}, nil)
-	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("mcp key role mismatch status=%d, want 422", status)
-	}
-	status = doJSON(t, http.MethodPatch, srv.URL+"/api/v1/admin/mcp-keys/"+rotated.Data.Key.ID, token, map[string]any{
-		"is_active": false,
-	}, nil)
-	if status != http.StatusOK {
-		t.Fatalf("deactivate mcp key status=%d", status)
-	}
-	if status, _ := doMCP(t, srv.URL, rotated.Data.Key.Token, 9, "initialize", mcpInitializeParams()); status != http.StatusUnauthorized {
-		t.Fatalf("deactivated key status=%d, want 401", status)
+	if status == http.StatusOK && writeCall.Error == nil {
+		t.Fatal("write tools must not be callable through MCP")
 	}
 
 	var ticket struct {

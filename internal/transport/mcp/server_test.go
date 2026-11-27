@@ -8,18 +8,16 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"firefreeforest/backend/internal/domain"
 )
 
-func connectTestServer(t *testing.T, role domain.UserRole) *sdkmcp.ClientSession {
+func connectTestServer(t *testing.T) *sdkmcp.ClientSession {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
 	server := NewServer(Deps{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}, role)
+	})
 	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatalf("connect server: %v", err)
@@ -47,60 +45,41 @@ func toolNames(t *testing.T, session *sdkmcp.ClientSession) map[string]bool {
 	return names
 }
 
-func TestToolCatalogByRole(t *testing.T) {
+func TestToolCatalogIsReadOnly(t *testing.T) {
 	readTools := []string{
 		"list_devices", "get_device", "get_device_status", "get_latest_telemetry",
 		"list_environment_telemetry", "aggregate_environment_telemetry",
 		"list_fire_telemetry", "aggregate_fire_telemetry",
+		"list_device_telemetry",
 		"list_events", "get_event", "list_event_timeline",
 		"list_commands", "get_command", "get_dashboard_summary", "reverse_geocode",
 	}
-	operational := []string{"acknowledge_event", "issue_pump_command"}
-
-	cases := []struct {
-		role      domain.UserRole
-		want      []string
-		forbidden []string
-	}{
-		{
-			role:      domain.RoleViewer,
-			want:      readTools,
-			forbidden: append(append([]string{}, operational...), "resolve_event"),
-		},
-		{
-			role: domain.RolePetugas,
-			want: append(append(append([]string{}, readTools...), operational...), "resolve_event"),
-		},
-		{
-			role:      domain.RoleAdmin,
-			want:      append(append([]string{}, readTools...), operational...),
-			forbidden: []string{"resolve_event"},
-		},
+	forbidden := []string{
+		"acknowledge_event", "resolve_event", "issue_pump_command", "refresh_device_telemetry",
 	}
 
-	for _, tc := range cases {
-		t.Run(string(tc.role), func(t *testing.T) {
-			session := connectTestServer(t, tc.role)
-			names := toolNames(t, session)
-			for _, name := range tc.want {
-				if !names[name] {
-					t.Fatalf("tool %q missing for role %s", name, tc.role)
-				}
-			}
-			for _, name := range tc.forbidden {
-				if names[name] {
-					t.Fatalf("tool %q must not be available for role %s", name, tc.role)
-				}
-			}
-		})
+	session := connectTestServer(t)
+	names := toolNames(t, session)
+	for _, name := range readTools {
+		if !names[name] {
+			t.Fatalf("tool %q missing", name)
+		}
+	}
+	for _, name := range forbidden {
+		if names[name] {
+			t.Fatalf("write tool %q must not be exposed", name)
+		}
 	}
 }
 
-func TestReadToolsAreAnnotatedReadOnly(t *testing.T) {
-	session := connectTestServer(t, domain.RoleViewer)
+func TestToolsAreAnnotatedReadOnly(t *testing.T) {
+	session := connectTestServer(t)
 	result, err := session.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
+	}
+	if len(result.Tools) == 0 {
+		t.Fatal("no tools registered")
 	}
 	for _, tool := range result.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
@@ -110,7 +89,7 @@ func TestReadToolsAreAnnotatedReadOnly(t *testing.T) {
 }
 
 func TestResourcesAndPrompts(t *testing.T) {
-	session := connectTestServer(t, domain.RoleViewer)
+	session := connectTestServer(t)
 
 	resources, err := session.ListResources(context.Background(), nil)
 	if err != nil {
@@ -139,7 +118,12 @@ func TestResourcesAndPrompts(t *testing.T) {
 		t.Fatalf("list prompts: %v", err)
 	}
 	if len(prompts.Prompts) != 3 {
-		t.Fatalf("viewer prompts = %d, want 3", len(prompts.Prompts))
+		t.Fatalf("prompts = %d, want 3", len(prompts.Prompts))
+	}
+	for _, prompt := range prompts.Prompts {
+		if prompt.Name == "pump_command_checklist" {
+			t.Fatal("pump_command_checklist must not be exposed")
+		}
 	}
 
 	prompt, err := session.GetPrompt(context.Background(), &sdkmcp.GetPromptParams{Name: "triage_events"})
@@ -152,30 +136,5 @@ func TestResourcesAndPrompts(t *testing.T) {
 
 	if _, err := session.GetPrompt(context.Background(), &sdkmcp.GetPromptParams{Name: "device_health"}); err == nil {
 		t.Fatal("device_health without device_id should fail")
-	}
-}
-
-func TestOperationalPromptsRequireOperatorRole(t *testing.T) {
-	viewer := connectTestServer(t, domain.RoleViewer)
-	prompts, err := viewer.ListPrompts(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("list prompts: %v", err)
-	}
-	for _, prompt := range prompts.Prompts {
-		if prompt.Name == "pump_command_checklist" {
-			t.Fatal("viewer must not see pump_command_checklist")
-		}
-	}
-
-	petugas := connectTestServer(t, domain.RolePetugas)
-	prompt, err := petugas.GetPrompt(context.Background(), &sdkmcp.GetPromptParams{
-		Name:      "pump_command_checklist",
-		Arguments: map[string]string{"device_id": "FFF-001"},
-	})
-	if err != nil {
-		t.Fatalf("get prompt: %v", err)
-	}
-	if len(prompt.Messages) != 1 {
-		t.Fatalf("prompt = %+v", prompt)
 	}
 }

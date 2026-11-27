@@ -15,7 +15,6 @@ import (
 
 type tools struct {
 	deps Deps
-	role domain.UserRole
 }
 
 // ---------------------------------------------------------------- inputs
@@ -144,72 +143,72 @@ type dashboardActiveEvent struct {
 
 // ---------------------------------------------------------------- registration
 
-func registerReadTools(s *sdkmcp.Server, d Deps, role domain.UserRole) {
-	t := &tools{deps: d, role: role}
+func registerReadTools(s *sdkmcp.Server, d Deps) {
+	t := &tools{deps: d}
 
 	sdkmcp.AddTool(s, readTool("list_devices",
 		"Daftar perangkat dengan pencarian dan pagination. Gunakan untuk menemukan device_id sebelum meminta detail atau telemetri.",
-		"Daftar Perangkat"), instrument(role, "list_devices", t.listDevices))
+		"Daftar Perangkat"), instrument("list_devices", t.listDevices))
 
 	sdkmcp.AddTool(s, readTool("get_device",
 		"Detail satu perangkat berdasarkan device_id publik.",
-		"Detail Perangkat"), instrument(role, "get_device", t.getDevice))
+		"Detail Perangkat"), instrument("get_device", t.getDevice))
 
 	sdkmcp.AddTool(s, readTool("get_device_status",
 		"Status online/offline, uptime, telemetri terakhir, dan risk level satu perangkat.",
-		"Status Perangkat"), instrument(role, "get_device_status", t.getDeviceStatus))
+		"Status Perangkat"), instrument("get_device_status", t.getDeviceStatus))
 
 	sdkmcp.AddTool(s, readTool("get_latest_telemetry",
 		"Telemetri lingkungan dan kebakaran terbaru beserta risk level satu perangkat.",
-		"Telemetri Terbaru"), instrument(role, "get_latest_telemetry", t.getLatestTelemetry))
+		"Telemetri Terbaru"), instrument("get_latest_telemetry", t.getLatestTelemetry))
 
 	sdkmcp.AddTool(s, readTool("list_environment_telemetry",
 		"Riwayat telemetri lingkungan (suhu, kelembapan, kelembapan tanah) dengan filter waktu dan pagination.",
-		"Riwayat Telemetri Lingkungan"), instrument(role, "list_environment_telemetry", t.listEnvironmentTelemetry))
+		"Riwayat Telemetri Lingkungan"), instrument("list_environment_telemetry", t.listEnvironmentTelemetry))
 
 	sdkmcp.AddTool(s, readTool("aggregate_environment_telemetry",
 		"Agregasi telemetri lingkungan per bucket waktu. interval_minutes=0 mengembalikan data mentah (maksimal 7 hari).",
-		"Agregasi Telemetri Lingkungan"), instrument(role, "aggregate_environment_telemetry", t.aggregateEnvironmentTelemetry))
+		"Agregasi Telemetri Lingkungan"), instrument("aggregate_environment_telemetry", t.aggregateEnvironmentTelemetry))
 
 	sdkmcp.AddTool(s, readTool("list_fire_telemetry",
 		"Riwayat telemetri kebakaran (flame, smoke, pump, buzzer) dengan filter waktu dan pagination.",
-		"Riwayat Telemetri Kebakaran"), instrument(role, "list_fire_telemetry", t.listFireTelemetry))
+		"Riwayat Telemetri Kebakaran"), instrument("list_fire_telemetry", t.listFireTelemetry))
 
 	sdkmcp.AddTool(s, readTool("aggregate_fire_telemetry",
 		"Agregasi telemetri kebakaran per bucket waktu. interval_minutes=0 mengembalikan data mentah (maksimal 7 hari).",
-		"Agregasi Telemetri Kebakaran"), instrument(role, "aggregate_fire_telemetry", t.aggregateFireTelemetry))
+		"Agregasi Telemetri Kebakaran"), instrument("aggregate_fire_telemetry", t.aggregateFireTelemetry))
 
 	sdkmcp.AddTool(s, readTool("list_device_telemetry",
 		"Riwayat telemetri perangkat (firmware, RSSI WiFi, tegangan dan persentase baterai) dengan filter waktu dan pagination.",
-		"Riwayat Telemetri Perangkat"), instrument(role, "list_device_telemetry", t.listDeviceTelemetry))
+		"Riwayat Telemetri Perangkat"), instrument("list_device_telemetry", t.listDeviceTelemetry))
 
 	sdkmcp.AddTool(s, readTool("list_events",
 		"Daftar event dengan filter device, tipe, severity, status, dan rentang waktu.",
-		"Daftar Event"), instrument(role, "list_events", t.listEvents))
+		"Daftar Event"), instrument("list_events", t.listEvents))
 
 	sdkmcp.AddTool(s, readTool("get_event",
 		"Detail event beserta preview timeline aktivitas terbaru.",
-		"Detail Event"), instrument(role, "get_event", t.getEvent))
+		"Detail Event"), instrument("get_event", t.getEvent))
 
 	sdkmcp.AddTool(s, readTool("list_event_timeline",
 		"Timeline lengkap satu event (notifikasi, acknowledgement, resolusi, dan aktivitas lain).",
-		"Timeline Event"), instrument(role, "list_event_timeline", t.listEventTimeline))
+		"Timeline Event"), instrument("list_event_timeline", t.listEventTimeline))
 
 	sdkmcp.AddTool(s, readTool("list_commands",
 		"Daftar command yang pernah dikirim ke satu perangkat.",
-		"Daftar Command"), instrument(role, "list_commands", t.listCommands))
+		"Daftar Command"), instrument("list_commands", t.listCommands))
 
 	sdkmcp.AddTool(s, readTool("get_command",
 		"Detail satu command berdasarkan command_id publik.",
-		"Detail Command"), instrument(role, "get_command", t.getCommand))
+		"Detail Command"), instrument("get_command", t.getCommand))
 
 	sdkmcp.AddTool(s, readTool("get_dashboard_summary",
 		"Ringkasan dashboard: jumlah perangkat online/offline, distribusi risk, event aktif per severity, dan event terbaru.",
-		"Ringkasan Dashboard"), instrument(role, "get_dashboard_summary", t.getDashboardSummary))
+		"Ringkasan Dashboard"), instrument("get_dashboard_summary", t.getDashboardSummary))
 
 	sdkmcp.AddTool(s, readTool("reverse_geocode",
 		"Ubah koordinat menjadi nama lokasi menggunakan penyedia geocoding yang dikonfigurasi.",
-		"Reverse Geocode"), instrument(role, "reverse_geocode", t.reverseGeocode))
+		"Reverse Geocode"), instrument("reverse_geocode", t.reverseGeocode))
 }
 
 // ---------------------------------------------------------------- read handlers

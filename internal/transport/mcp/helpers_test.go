@@ -164,15 +164,6 @@ func TestJSONResult(t *testing.T) {
 	}
 }
 
-func TestIdempotencyKey(t *testing.T) {
-	keyID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
-	got := idempotencyKey(keyID, "pump-1")
-	want := "ff:mcp:idem:11111111-2222-3333-4444-555555555555:pump-1"
-	if got != want {
-		t.Fatalf("idempotencyKey = %q, want %q", got, want)
-	}
-}
-
 func TestNewTimelineItems(t *testing.T) {
 	actorID := uuid.New()
 	eventID := uuid.New()

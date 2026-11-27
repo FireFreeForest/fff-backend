@@ -9,8 +9,8 @@ info:
     Autentikasi REST memakai Bearer JWT dari `POST /auth/login`.
 
     MCP (Model Context Protocol) tersedia di `/mcp` (Streamable HTTP) dan
-    binary stdio `mcp`, menggunakan header `Authorization: Bearer mcp_...`
-    dengan API key yang dikelola lewat `/admin/mcp-keys`.
+    binary stdio `mcp`. Akses MCP bersifat read-only dan memakai token statis
+    dari environment `MCP_API_KEY` sebagai header `Authorization: Bearer <token>`.
 servers:
   - url: /api/v1
     description: Same origin as the docs.
@@ -21,8 +21,6 @@ tags:
     description: Login, rotasi refresh token, profil, dan logout.
   - name: Users
     description: Manajemen user (khusus admin).
-  - name: MCP Keys
-    description: Manajemen API key untuk server MCP (khusus admin).
   - name: Devices
     description: Manajemen dan status perangkat.
   - name: Telemetry
@@ -254,145 +252,6 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/User" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "422":
-          description: Validasi gagal
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /admin/mcp-keys:
-    get:
-      tags: [MCP Keys]
-      summary: Daftar MCP API key (admin)
-      parameters:
-        - $ref: "#/components/parameters/Page"
-        - $ref: "#/components/parameters/PerPage"
-      responses:
-        "200":
-          description: Daftar MCP API key
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/ListEnvelope"
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: "#/components/schemas/MCPAPIKey" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-    post:
-      tags: [MCP Keys]
-      summary: Buat MCP API key (admin)
-      description: Token hanya dikembalikan sekali pada respons pembuatan.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name, role]
-              properties:
-                name: { type: string, maxLength: 100 }
-                role: { type: string, enum: [admin, petugas, viewer] }
-                actor_id: { type: string, format: uuid, nullable: true }
-                expires_at: { type: string, format: date-time, nullable: true }
-      responses:
-        "201":
-          description: MCP API key dibuat
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/DataEnvelope"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/MCPAPIKeyCreated" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "422":
-          description: Validasi gagal
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /admin/mcp-keys/{keyID}:
-    patch:
-      tags: [MCP Keys]
-      summary: Ubah MCP API key (admin)
-      parameters:
-        - $ref: "#/components/parameters/MCPKeyID"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name: { type: string, maxLength: 100 }
-                role: { type: string, enum: [admin, petugas, viewer] }
-                actor_id: { type: string, format: uuid, nullable: true }
-                clear_actor_id: { type: boolean }
-                expires_at: { type: string, format: date-time, nullable: true }
-                clear_expires_at: { type: boolean }
-                is_active: { type: boolean }
-      responses:
-        "200":
-          description: MCP API key diperbarui
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/DataEnvelope"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/MCPAPIKey" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "422":
-          description: Validasi gagal
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
-  /admin/mcp-keys/{keyID}/rotate:
-    post:
-      tags: [MCP Keys]
-      summary: Rotasi MCP API key (admin)
-      description: |
-        Membuat key baru dengan role dan actor yang sama. Key lama langsung
-        dinonaktifkan bila `grace_seconds` 0, atau tetap berlaku sampai masa
-        tenggang berakhir.
-      parameters:
-        - $ref: "#/components/parameters/MCPKeyID"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                grace_seconds:
-                  { type: integer, minimum: 0, maximum: 604800, default: 0 }
-      responses:
-        "200":
-          description: MCP API key dirotasi
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/DataEnvelope"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/MCPAPIKeyRotated" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1136,11 +995,6 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
-    MCPKeyID:
-      name: keyID
-      in: path
-      required: true
-      schema: { type: string, format: uuid }
     FromRequired:
       name: from
       in: query
@@ -1672,32 +1526,3 @@ components:
         recent_events:
           type: array
           items: { $ref: "#/components/schemas/Event" }
-
-    MCPAPIKey:
-      type: object
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        key_prefix: { type: string, example: mcp_0123456789ab }
-        role: { type: string, enum: [admin, petugas, viewer] }
-        actor_id: { type: string, format: uuid, nullable: true }
-        is_active: { type: boolean }
-        expires_at: { type: string, format: date-time, nullable: true }
-        last_used_at: { type: string, format: date-time, nullable: true }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-
-    MCPAPIKeyCreated:
-      allOf:
-        - $ref: "#/components/schemas/MCPAPIKey"
-        - type: object
-          properties:
-            token:
-              type: string
-              description: Token lengkap; hanya ditampilkan sekali.
-
-    MCPAPIKeyRotated:
-      type: object
-      properties:
-        key: { $ref: "#/components/schemas/MCPAPIKeyCreated" }
-        previous: { $ref: "#/components/schemas/MCPAPIKey" }

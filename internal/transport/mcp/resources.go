@@ -21,7 +21,7 @@ const (
 	deviceLatestTemplate = "firefreeforest://devices/{device_id}/latest"
 )
 
-func registerResources(s *sdkmcp.Server, d Deps, role domain.UserRole) {
+func registerResources(s *sdkmcp.Server, d Deps) {
 	addJSONResource(s, devicesResourceURI, "devices",
 		"Daftar seluruh perangkat beserta status dan lokasinya.",
 		func(ctx context.Context) (any, error) {

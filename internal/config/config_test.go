@@ -18,9 +18,8 @@ func setRequired(t *testing.T) {
 
 func TestLoadDefaults(t *testing.T) {
 	setRequired(t)
-	t.Setenv("MCP_ENABLED", "")
-	t.Setenv("MCP_ROLE", "")
 	t.Setenv("MCP_RATE_LIMIT_PER_MIN", "")
+	t.Setenv("MCP_API_KEY", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -50,11 +49,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AutoPumpDuration != 30*time.Second {
 		t.Fatalf("AutoPumpDuration = %s", cfg.AutoPumpDuration)
 	}
-	if cfg.MCPEnabled {
-		t.Fatal("MCP should be disabled by default")
+	if cfg.MCPAPIKey != "" {
+		t.Fatal("MCP API key should be empty by default")
 	}
-	if cfg.MCPRateLimitPerMin != 120 || cfg.MCPRole != "viewer" {
-		t.Fatalf("unexpected MCP defaults: rate=%d role=%q", cfg.MCPRateLimitPerMin, cfg.MCPRole)
+	if cfg.MCPRateLimitPerMin != 120 {
+		t.Fatalf("unexpected MCP default rate=%d", cfg.MCPRateLimitPerMin)
 	}
 }
 
@@ -71,9 +70,7 @@ func TestLoadValidation(t *testing.T) {
 		{"invalid mqtt prefix", "MQTT_TOPIC_PREFIX", "free/flame"},
 		{"auto pump longer than max", "AUTO_PUMP_DURATION", "600s"},
 		{"offline threshold too low", "DEVICE_OFFLINE_AFTER", "1s"},
-		{"invalid mcp role", "MCP_ROLE", "operator"},
 		{"negative mcp rate limit", "MCP_RATE_LIMIT_PER_MIN", "-1"},
-		{"invalid mcp actor id", "MCP_ACTOR_ID", "not-a-uuid"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,8 +111,8 @@ func TestLoadMCPDoesNotRequireJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMCP: %v", err)
 	}
-	if cfg.MCPRole != "viewer" {
-		t.Fatalf("MCPRole = %q", cfg.MCPRole)
+	if cfg.MCPRateLimitPerMin != 120 {
+		t.Fatalf("MCPRateLimitPerMin = %d", cfg.MCPRateLimitPerMin)
 	}
 	if _, err := Load(); err == nil {
 		t.Fatal("Load should still require JWT_SECRET")

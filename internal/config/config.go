@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"firefreeforest/backend/internal/domain"
 )
 
@@ -74,10 +72,7 @@ type Config struct {
 	FCMMinSeverity     string
 	FCMEventTypes      []string
 
-	MCPEnabled         bool
 	MCPRateLimitPerMin int
-	MCPRole            domain.UserRole
-	MCPActorID         string
 	MCPAPIKey          string
 }
 
@@ -158,10 +153,7 @@ func load(requireJWT bool) (*Config, error) {
 			"FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH,SOIL_DRY,DEVICE_OFFLINE,SENSOR_ERROR,LOW_BATTERY",
 		),
 
-		MCPEnabled:         envBool("MCP_ENABLED", false),
 		MCPRateLimitPerMin: envInt("MCP_RATE_LIMIT_PER_MIN", 120),
-		MCPRole:            domain.UserRole(strings.ToLower(env("MCP_ROLE", string(domain.RoleViewer)))),
-		MCPActorID:         env("MCP_ACTOR_ID", ""),
 		MCPAPIKey:          env("MCP_API_KEY", ""),
 	}
 
@@ -210,16 +202,8 @@ func load(requireJWT bool) (*Config, error) {
 	}
 	cfg.FCMEventTypes = normalizedEvents
 
-	if !domain.ValidRole(cfg.MCPRole) {
-		return nil, fmt.Errorf("MCP_ROLE must be admin, petugas, or viewer")
-	}
 	if cfg.MCPRateLimitPerMin < 0 {
 		return nil, fmt.Errorf("MCP_RATE_LIMIT_PER_MIN must be zero or greater")
-	}
-	if cfg.MCPActorID != "" {
-		if _, err := uuid.Parse(cfg.MCPActorID); err != nil {
-			return nil, fmt.Errorf("MCP_ACTOR_ID must be a valid UUID")
-		}
 	}
 
 	return cfg, nil
