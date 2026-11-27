@@ -191,6 +191,13 @@ Semua endpoint di bawah prefix `/api/v1`.
 | DELETE | `/push/tokens/:token` | semua | Hapus token FCM |
 | POST | `/realtime/ticket` | semua | Tiket WebSocket (60 detik) |
 | GET | `/ws?ticket=...` | tiket | Koneksi WebSocket |
+| GET | `/mastra/api/agents` | semua | Daftar agent Mastra (bila `MASTRA_URL` diisi) |
+| GET | `/mastra/api/agents/:agentId` | semua | Detail agent Mastra |
+| POST | `/mastra/api/agents/:agentId/stream` | semua | Stream jawaban agent (SSE) |
+| POST | `/mastra/api/agents/:agentId/generate` | semua | Jawaban agent tanpa streaming |
+| GET, POST | `/mastra/api/memory/threads` | semua | Daftar / buat thread memory |
+| GET, PATCH, DELETE | `/mastra/api/memory/threads/:threadId` | semua | Detail / rename / hapus thread |
+| GET | `/mastra/api/memory/threads/:threadId/messages` | semua | Daftar pesan dalam thread |
 
 Filter daftar event: `severity`, `status`, `event_type`, `device_id`, `from`, `to` (RFC3339), `page`, `per_page`.
 
@@ -318,6 +325,41 @@ Binary stdio memakai `DB_DSN` dan `REDIS_ADDR` yang sama dengan API, menulis log
     }
   }
 }
+```
+
+## Assistant (Mastra proxy)
+
+Backend mem-proxy chatbot Mastra agar browser tidak pernah memanggil Mastra
+langsung. Aktif bila `MASTRA_URL` diisi (misalnya `http://127.0.0.1:4111`,
+atau `http://agent:4111` di jaringan internal). Bila kosong, route assistant
+tidak didaftarkan dan backend menulis warning saat startup.
+
+| Hal | Detail |
+| --- | --- |
+| Auth | Bearer JWT user (sama dengan REST); Mastra memverifikasi token yang sama |
+| Prefix | `/api/v1/mastra/api/...` |
+| Rate limit | `ASSISTANT_RATE_LIMIT_PER_MIN` per user per menit (admin ×3, petugas ×2) |
+| Stream | `ASSISTANT_MAX_CONCURRENT_STREAMS` stream aktif per user |
+| Allowlist | `GET /api/agents`, `GET /api/agents/fff-data-analyst`, `POST .../stream`, `POST .../generate`, dan route `memory/threads` (list/get/create/rename/delete/messages) |
+
+Path lain (misalnya `memory/threads/:id/transfer`, `clone`, `working-memory`,
+`/api/stored/*`, `/api/observability/*`) tetap ditolak `403` walaupun ada di
+Mastra. Riwayat chat memakai route memory; isolasi per user berasal dari JWT
+`sub` melalui `mapUserToResourceId` di Mastra.
+
+`cmd/api` memakai `WriteTimeout` lima menit dan proxy menghapus write deadline
+per request, sehingga stream SSE yang panjang tidak terputus. Pastikan reverse
+proxy di depan tidak mem-buffer SSE.
+
+Endpoint assistant juga terdokumentasi di Swagger (`/docs`) pada tag
+**Assistant**. Bila `MASTRA_URL` kosong, path `/api/v1/mastra/*` tidak terdaftar
+sehingga mengembalikan `404`.
+
+Contoh:
+
+```bash
+curl http://localhost:8080/api/v1/mastra/api/agents \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## WebSocket
@@ -496,9 +538,11 @@ Lihat `.env.example`. Variabel wajib:
 - `DB_DSN`
 - `JWT_SECRET` minimal 24 karakter
 
-Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `THRESHOLD_BATTERY_LOW_PERCENT`, `TELEMETRY_REFRESH_TIMEOUT`, `TELEMETRY_REFRESH_THROTTLE`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`, `MCP_API_KEY`, `MCP_RATE_LIMIT_PER_MIN`.
+Variabel penting lain: `REDIS_ADDR`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_DEVICE_USERNAME`, `MQTT_DEVICE_PASSWORD`, `MQTT_TOPIC_PREFIX`, `THRESHOLD_SMOKE_LEVEL`, `THRESHOLD_TEMPERATURE_HIGH_C`, `THRESHOLD_SOIL_DRY_ADC`, `THRESHOLD_BATTERY_LOW_PERCENT`, `TELEMETRY_REFRESH_TIMEOUT`, `TELEMETRY_REFRESH_THROTTLE`, `AUTO_PUMP_ENABLED`, `GEOCODE_BASE_URL`, `GEOCODE_USER_AGENT`, `GEOCODE_CACHE_TTL`, `FCM_CREDENTIALS_FILE`, `FCM_MIN_SEVERITY`, `FCM_EVENT_TYPES`, `CORS_ORIGINS`, `WS_ALLOWED_ORIGIN`, `MCP_API_KEY`, `MCP_RATE_LIMIT_PER_MIN`, `MASTRA_URL`, `ASSISTANT_RATE_LIMIT_PER_MIN`, `ASSISTANT_MAX_CONCURRENT_STREAMS`.
 
 Untuk MCP: `MCP_API_KEY` (kosong = endpoint `/mcp` nonaktif) adalah satu-satunya token Bearer untuk akses read-only; `MCP_RATE_LIMIT_PER_MIN` membatasi request per menit (default `120`, `0` menonaktifkan). Binary stdio tidak memerlukan token.
+
+Untuk assistant: `MASTRA_URL` (kosong = route `/api/v1/mastra/*` nonaktif), `ASSISTANT_RATE_LIMIT_PER_MIN` (default `20`, `0` menonaktifkan rate limit), dan `ASSISTANT_MAX_CONCURRENT_STREAMS` (default `2`, `0` menonaktifkan guard stream).
 
 `MQTT_DEVICE_USERNAME` dan `MQTT_DEVICE_PASSWORD` wajib diisi saat memakai Docker Compose; nilainya dipakai semua device dan website virtual device. Gunakan username acak serta password panjang, bukan default contoh.
 

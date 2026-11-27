@@ -74,6 +74,10 @@ type Config struct {
 
 	MCPRateLimitPerMin int
 	MCPAPIKey          string
+
+	MastraURL                string
+	AssistantRateLimitPerMin int
+	AssistantMaxConcurrent   int
 }
 
 func Load() (*Config, error) { return load(true) }
@@ -155,6 +159,10 @@ func load(requireJWT bool) (*Config, error) {
 
 		MCPRateLimitPerMin: envInt("MCP_RATE_LIMIT_PER_MIN", 120),
 		MCPAPIKey:          env("MCP_API_KEY", ""),
+
+		MastraURL:                env("MASTRA_URL", ""),
+		AssistantRateLimitPerMin: envInt("ASSISTANT_RATE_LIMIT_PER_MIN", 20),
+		AssistantMaxConcurrent:   envInt("ASSISTANT_MAX_CONCURRENT_STREAMS", 2),
 	}
 
 	if cfg.DBDSN == "" {
@@ -204,6 +212,12 @@ func load(requireJWT bool) (*Config, error) {
 
 	if cfg.MCPRateLimitPerMin < 0 {
 		return nil, fmt.Errorf("MCP_RATE_LIMIT_PER_MIN must be zero or greater")
+	}
+	if cfg.AssistantRateLimitPerMin < 0 {
+		return nil, fmt.Errorf("ASSISTANT_RATE_LIMIT_PER_MIN must be zero or greater")
+	}
+	if cfg.AssistantMaxConcurrent < 0 {
+		return nil, fmt.Errorf("ASSISTANT_MAX_CONCURRENT_STREAMS must be zero or greater")
 	}
 
 	return cfg, nil

@@ -11,6 +11,11 @@ info:
     MCP (Model Context Protocol) tersedia di `/mcp` (Streamable HTTP) dan
     binary stdio `mcp`. Akses MCP bersifat read-only dan memakai token statis
     dari environment `MCP_API_KEY` sebagai header `Authorization: Bearer <token>`.
+
+    Assistant memakai proxy ke Mastra di `/mastra/api/*`, aktif hanya bila
+    `MASTRA_URL` diisi (bila kosong path tidak terdaftar dan mengembalikan 404).
+    Browser tidak pernah memanggil Mastra langsung; backend meneruskan JWT user,
+    menerapkan rate limit, dan hanya mengizinkan path yang ada di allowlist.
 servers:
   - url: /api/v1
     description: Same origin as the docs.
@@ -45,6 +50,12 @@ tags:
       `connected`, `telemetry.environment`, `telemetry.fire`, `event.created`,
       `event.resolved`, `risk.updated`, `device.status`, `command.issued`,
       `command.ack`, `command.timeout`.
+  - name: Assistant
+    description: |
+      Proxy chatbot Mastra (aktif hanya bila `MASTRA_URL` diisi).
+      Browser tidak pernah memanggil Mastra langsung; backend meneruskan JWT
+      user, menerapkan rate limit per user, dan menolak path di luar allowlist.
+      Response sukses diteruskan apa adanya dari Mastra.
 
 paths:
   /auth/login:
@@ -971,6 +982,258 @@ paths:
                           ticket: { type: string }
                           expires_in: { type: integer, example: 60 }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /mastra/api/agents:
+    get:
+      tags: [Assistant]
+      summary: Daftar agent Mastra
+      description: "Hanya tersedia bila MASTRA_URL diisi. Response diteruskan dari Mastra."
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /mastra/api/agents/{agentId}:
+    parameters:
+      - name: agentId
+        in: path
+        required: true
+        schema: { type: string, example: fff-data-analyst }
+    get:
+      tags: [Assistant]
+      summary: Detail agent Mastra
+      description: "Hanya tersedia bila MASTRA_URL diisi. Response diteruskan dari Mastra."
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /mastra/api/agents/{agentId}/stream:
+    parameters:
+      - name: agentId
+        in: path
+        required: true
+        schema: { type: string, example: fff-data-analyst }
+    post:
+      tags: [Assistant]
+      summary: Stream jawaban agent (SSE)
+      description: |
+        Hanya tersedia bila MASTRA_URL diisi. Streaming diteruskan tanpa
+        buffering (`text/event-stream`). Body diteruskan ke Mastra; jangan
+        mengirim `memory.resource` karena nilainya diturunkan dari JWT `sub`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Stream SSE dari Mastra
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /mastra/api/agents/{agentId}/generate:
+    parameters:
+      - name: agentId
+        in: path
+        required: true
+        schema: { type: string, example: fff-data-analyst }
+    post:
+      tags: [Assistant]
+      summary: Jawaban agent tanpa streaming
+      description: "Hanya tersedia bila MASTRA_URL diisi. Response diteruskan dari Mastra."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /mastra/api/memory/threads:
+    get:
+      tags: [Assistant]
+      summary: Daftar thread memory milik user
+      description: "Hanya tersedia bila MASTRA_URL diisi. Response diteruskan dari Mastra; thread terisolasi per user dari JWT sub."
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      tags: [Assistant]
+      summary: Buat thread memory
+      description: "Hanya tersedia bila MASTRA_URL diisi. Body diteruskan dari Mastra."
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /mastra/api/memory/threads/{threadId}:
+    parameters:
+      - name: threadId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Assistant]
+      summary: Detail thread memory
+      description: "Hanya tersedia bila MASTRA_URL diisi."
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    patch:
+      tags: [Assistant]
+      summary: Ubah thread memory (mis. rename)
+      description: "Hanya tersedia bila MASTRA_URL diisi. Body diteruskan dari Mastra."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Assistant]
+      summary: Hapus thread memory
+      description: "Hanya tersedia bila MASTRA_URL diisi."
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /mastra/api/memory/threads/{threadId}/messages:
+    parameters:
+      - name: threadId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Assistant]
+      summary: Daftar pesan dalam thread
+      description: "Hanya tersedia bila MASTRA_URL diisi. Response diteruskan dari Mastra."
+      responses:
+        "200":
+          description: Response Mastra
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Mastra tidak tersedia
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
 components:
   securitySchemes:

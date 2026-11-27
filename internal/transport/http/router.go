@@ -30,14 +30,15 @@ type Deps struct {
 }
 
 type Handler struct {
-	cfg      *config.Config
-	repo     *repository.Repository
-	auth     *service.AuthService
-	commands *service.CommandService
-	geocoder *service.Geocoder
-	hub      *ws.Hub
-	rdb      *goredis.Client
-	log      *slog.Logger
+	cfg       *config.Config
+	repo      *repository.Repository
+	auth      *service.AuthService
+	commands  *service.CommandService
+	geocoder  *service.Geocoder
+	hub       *ws.Hub
+	rdb       *goredis.Client
+	log       *slog.Logger
+	assistant *mastraProxy
 }
 
 func NewRouter(d Deps) *gin.Engine {
@@ -74,6 +75,17 @@ func NewRouter(d Deps) *gin.Engine {
 		r.Any("/mcp", gin.WrapH(mcpHandler))
 	}
 
+	if d.Config.MastraURL != "" {
+		proxy, err := newMastraProxy(d.Config.MastraURL, d.Logger)
+		if err != nil {
+			h.log.Error("mastra proxy disabled", "error", err)
+		} else {
+			h.assistant = proxy
+		}
+	} else {
+		h.log.Warn("MASTRA_URL is empty; assistant routes are disabled")
+	}
+
 	v1 := r.Group("/api/v1")
 	v1.POST("/auth/login", loginRateLimit(d.Redis, d.Config.LoginRatePerMin), h.login)
 	v1.POST("/auth/refresh", h.refresh)
@@ -103,6 +115,13 @@ func NewRouter(d Deps) *gin.Engine {
 	secured.GET("/geocode/reverse", h.reverseGeocode)
 	secured.POST("/push/tokens", h.registerPushToken)
 	secured.DELETE("/push/tokens/:token", h.deletePushToken)
+
+	if h.assistant != nil {
+		secured.Any("/mastra/*path",
+			assistantGuard(h.rdb, h.cfg),
+			h.assistant.handler(),
+		)
+	}
 
 	operator := secured.Group("")
 	operator.Use(requireRoles(domain.RoleAdmin, domain.RolePetugas))

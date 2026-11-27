@@ -20,6 +20,9 @@ func TestLoadDefaults(t *testing.T) {
 	setRequired(t)
 	t.Setenv("MCP_RATE_LIMIT_PER_MIN", "")
 	t.Setenv("MCP_API_KEY", "")
+	t.Setenv("MASTRA_URL", "")
+	t.Setenv("ASSISTANT_RATE_LIMIT_PER_MIN", "")
+	t.Setenv("ASSISTANT_MAX_CONCURRENT_STREAMS", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -55,6 +58,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MCPRateLimitPerMin != 120 {
 		t.Fatalf("unexpected MCP default rate=%d", cfg.MCPRateLimitPerMin)
 	}
+	if cfg.MastraURL != "" {
+		t.Fatalf("MastraURL should be empty by default, got %q", cfg.MastraURL)
+	}
+	if cfg.AssistantRateLimitPerMin != 20 {
+		t.Fatalf("AssistantRateLimitPerMin = %d, want 20", cfg.AssistantRateLimitPerMin)
+	}
+	if cfg.AssistantMaxConcurrent != 2 {
+		t.Fatalf("AssistantMaxConcurrent = %d, want 2", cfg.AssistantMaxConcurrent)
+	}
 }
 
 func TestLoadValidation(t *testing.T) {
@@ -71,6 +83,8 @@ func TestLoadValidation(t *testing.T) {
 		{"auto pump longer than max", "AUTO_PUMP_DURATION", "600s"},
 		{"offline threshold too low", "DEVICE_OFFLINE_AFTER", "1s"},
 		{"negative mcp rate limit", "MCP_RATE_LIMIT_PER_MIN", "-1"},
+		{"negative assistant rate limit", "ASSISTANT_RATE_LIMIT_PER_MIN", "-1"},
+		{"negative assistant concurrent", "ASSISTANT_MAX_CONCURRENT_STREAMS", "-1"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,6 +107,32 @@ func TestLoadNormalizesFCMEventTypes(t *testing.T) {
 	want := "FIRE_DETECTED,SMOKE_DETECTED,TEMPERATURE_HIGH"
 	if got := strings.Join(cfg.FCMEventTypes, ","); got != want {
 		t.Fatalf("FCMEventTypes = %q, want %q", got, want)
+	}
+}
+
+func TestLoadAssistantConfig(t *testing.T) {
+	setRequired(t)
+	t.Setenv("MASTRA_URL", "http://127.0.0.1:4111")
+	t.Setenv("ASSISTANT_RATE_LIMIT_PER_MIN", "35")
+	t.Setenv("ASSISTANT_MAX_CONCURRENT_STREAMS", "4")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.MastraURL != "http://127.0.0.1:4111" {
+		t.Fatalf("MastraURL = %q", cfg.MastraURL)
+	}
+	if cfg.AssistantRateLimitPerMin != 35 || cfg.AssistantMaxConcurrent != 4 {
+		t.Fatalf("unexpected assistant limits: rate=%d concurrent=%d", cfg.AssistantRateLimitPerMin, cfg.AssistantMaxConcurrent)
+	}
+}
+
+func TestLoadAssistantZeroLimitsAreValid(t *testing.T) {
+	setRequired(t)
+	t.Setenv("ASSISTANT_RATE_LIMIT_PER_MIN", "0")
+	t.Setenv("ASSISTANT_MAX_CONCURRENT_STREAMS", "0")
+	if _, err := Load(); err != nil {
+		t.Fatalf("zero limits should be valid, got %v", err)
 	}
 }
 

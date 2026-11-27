@@ -106,3 +106,32 @@ func refExists(root any, ref string) bool {
 	}
 	return true
 }
+
+func TestOpenAPIHasAssistantPaths(t *testing.T) {
+	spec := loadSpec(t)
+	paths, _ := spec["paths"].(map[string]any)
+	for _, path := range []string{
+		"/mastra/api/agents",
+		"/mastra/api/agents/{agentId}",
+		"/mastra/api/agents/{agentId}/stream",
+		"/mastra/api/agents/{agentId}/generate",
+		"/mastra/api/memory/threads",
+		"/mastra/api/memory/threads/{threadId}",
+		"/mastra/api/memory/threads/{threadId}/messages",
+	} {
+		if _, ok := paths[path]; !ok {
+			t.Fatalf("path %q must be documented", path)
+		}
+	}
+
+	for _, path := range []string{
+		"/mastra/api/memory/threads/{threadId}/transfer",
+		"/mastra/api/memory/threads/{threadId}/clone",
+		"/mastra/api/memory/threads/{threadId}/working-memory",
+		"/mastra/api/stored/{key}",
+	} {
+		if _, ok := paths[path]; ok {
+			t.Fatalf("path %q must not be documented", path)
+		}
+	}
+}
