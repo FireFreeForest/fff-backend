@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -49,6 +50,19 @@ func newMastraProxy(rawURL string, log *slog.Logger) (*mastraProxy, error) {
 			r.Out.URL.RawPath = ""
 			r.SetURL(target)
 			r.Out.Host = target.Host
+
+			// The backend terminates the client connection, so any
+			// X-Forwarded-* value from the client is untrusted. Drop it and let
+			// the proxy rebuild the chain from the real connection.
+			for _, header := range []string{
+				"X-Forwarded-For",
+				"X-Forwarded-Host",
+				"X-Forwarded-Proto",
+				"X-Real-IP",
+			} {
+				r.Out.Header.Del(header)
+			}
+			r.SetXForwarded()
 
 			// The backend only validates the JWT; Mastra verifies the same token
 			// with the shared secret and derives the memory owner from its sub.
@@ -102,8 +116,12 @@ func (p *mastraProxy) handler() gin.HandlerFunc {
 		}
 
 		// Streams can outlive the server-wide write timeout; clear the deadline
-		// for this connection when the writer supports it.
-		_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
+		// for this connection when the writer supports it. Only agent calls need
+		// it: leaving the deadline in place for ordinary requests keeps the
+		// server's slow-writer protection.
+		if isAssistantStreamRequest(c.Request.Method, upstream) {
+			_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
+		}
 
 		userID, role, _ := currentUser(c)
 		start := time.Now()
@@ -171,12 +189,18 @@ func isAssistantStreamRequest(method, upstreamPath string) bool {
 // thread clone/transfer, stored data, observability and Studio routes stay
 // unreachable even though they exist upstream.
 func allowedAssistantRequest(method, upstreamPath string) bool {
-	path := strings.TrimSuffix(upstreamPath, "/")
-	if path == "" {
-		path = "/"
+	// Normalize before matching: dot segments must never reach the allowlist as
+	// opaque thread IDs, because the upstream may normalize them differently.
+	p := strings.TrimSuffix(upstreamPath, "/")
+	if p == "" {
+		p = "/"
+	}
+	p = path.Clean(p)
+	if !strings.HasPrefix(p, "/") {
+		return false
 	}
 
-	switch path {
+	switch p {
 	case "/api/agents":
 		return method == http.MethodGet
 	case "/api/agents/" + mastraAgentID:
@@ -188,20 +212,41 @@ func allowedAssistantRequest(method, upstreamPath string) bool {
 		return method == http.MethodGet || method == http.MethodPost
 	}
 
-	rest, ok := strings.CutPrefix(path, "/api/memory/threads/")
+	rest, ok := strings.CutPrefix(p, "/api/memory/threads/")
 	if !ok || rest == "" {
 		return false
 	}
 	parts := strings.Split(rest, "/")
 	switch len(parts) {
 	case 1:
-		if parts[0] == "" {
+		if !validThreadID(parts[0]) {
 			return false
 		}
 		return method == http.MethodGet || method == http.MethodPatch || method == http.MethodDelete
 	case 2:
-		return parts[0] != "" && parts[1] == "messages" && method == http.MethodGet
+		return validThreadID(parts[0]) && parts[1] == "messages" && method == http.MethodGet
 	default:
 		return false
 	}
+}
+
+// validThreadID keeps thread identifiers to an opaque, URL-safe charset. It
+// rejects empty IDs, dot segments, path separators and percent-encoded bytes so
+// the upstream cannot be reached through a different route after normalization.
+func validThreadID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-',
+			r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -47,7 +47,14 @@ func TestAllowedAssistantRequest(t *testing.T) {
 		{"rename thread", http.MethodPatch, "/api/memory/threads/t1", true},
 		{"delete thread", http.MethodDelete, "/api/memory/threads/t1", true},
 		{"list messages", http.MethodGet, "/api/memory/threads/t1/messages", true},
+		{"thread id safe charset", http.MethodGet, "/api/memory/threads/thread_01-ab", true},
 		{"trailing slash trimmed", http.MethodGet, "/api/memory/threads/", true},
+		{"dot segment", http.MethodGet, "/api/memory/threads/..", false},
+		{"parent traversal", http.MethodGet, "/api/memory/threads/../../observability/traces", false},
+		{"encoded traversal", http.MethodGet, "/api/memory/threads/%2e%2e", false},
+		{"double encoded traversal", http.MethodGet, "/api/memory/threads/%252e%252e", false},
+		{"thread id with separator", http.MethodGet, "/api/memory/threads/t1%2fx", false},
+		{"thread id too long", http.MethodGet, "/api/memory/threads/" + strings.Repeat("a", 129), false},
 		{"thread clone", http.MethodPost, "/api/memory/threads/t1/clone", false},
 		{"thread transfer", http.MethodPost, "/api/memory/threads/t1/transfer", false},
 		{"working memory", http.MethodGet, "/api/memory/threads/t1/working-memory", false},
@@ -266,6 +273,19 @@ func TestMastraProxyForwardsAndStrips(t *testing.T) {
 		if r.URL.Path != "/api/agents" {
 			t.Errorf("upstream path = %q, want /api/agents", r.URL.Path)
 		}
+		// Client-supplied forwarding headers must never reach the upstream.
+		if got := r.Header.Get("X-Forwarded-For"); strings.Contains(got, "1.2.3.4") || got == "" {
+			t.Errorf("upstream X-Forwarded-For = %q, want only the real client IP", got)
+		}
+		if got := r.Header.Get("X-Forwarded-Host"); got == "evil.example" {
+			t.Errorf("client X-Forwarded-Host leaked upstream")
+		}
+		if got := r.Header.Get("X-Forwarded-Proto"); got != "http" {
+			t.Errorf("upstream X-Forwarded-Proto = %q, want http", got)
+		}
+		if got := r.Header.Get("X-Real-IP"); got != "" {
+			t.Errorf("upstream X-Real-IP = %q, want empty", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
@@ -279,6 +299,10 @@ func TestMastraProxyForwardsAndStrips(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer user-token")
 	req.Header.Set("Cookie", "session=abc")
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.Header.Set("X-Forwarded-Host", "evil.example")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Real-IP", "1.2.3.4")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("do request: %v", err)
@@ -404,6 +428,41 @@ func TestMastraProxyRejectsDisallowedPath(t *testing.T) {
 	}
 	if called {
 		t.Fatal("upstream must not be called for a disallowed path")
+	}
+}
+
+func TestMastraProxyRejectsTraversalPath(t *testing.T) {
+	var called bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer upstream.Close()
+
+	srv := newProxyTestServer(t, upstream.URL)
+
+	for _, path := range []string{
+		"/api/memory/threads/..",
+		"/api/memory/threads/../../observability/traces",
+		"/api/memory/threads/%252e%252e",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, srv.URL+assistantProxyPrefix+path, nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("do request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", resp.StatusCode)
+			}
+		})
+	}
+	if called {
+		t.Fatal("upstream must not be called for a traversal path")
 	}
 }
 

@@ -347,9 +347,30 @@ Path lain (misalnya `memory/threads/:id/transfer`, `clone`, `working-memory`,
 Mastra. Riwayat chat memakai route memory; isolasi per user berasal dari JWT
 `sub` melalui `mapUserToResourceId` di Mastra.
 
-`cmd/api` memakai `WriteTimeout` lima menit dan proxy menghapus write deadline
-per request, sehingga stream SSE yang panjang tidak terputus. Pastikan reverse
+`cmd/api` memakai `WriteTimeout` lima menit. Proxy menghapus write deadline
+hanya untuk request agent (`stream`/`generate`) agar SSE panjang tidak
+terputus; request biasa tetap memakai batas waktu server. Pastikan reverse
 proxy di depan tidak mem-buffer SSE.
+
+### Keamanan
+
+Proxy meneruskan header `Authorization` user apa adanya, dan Mastra
+memverifikasi JWT yang sama memakai `JWT_SECRET` backend. Artinya **Mastra
+adalah komponen dengan level kepercayaan setara backend**: siapa pun yang
+menguasai proses Mastra atau `JWT_SECRET` dapat membuat token untuk role mana
+pun. Jalankan Mastra hanya di jaringan internal, jangan pernah mengekspos
+port-nya ke publik, dan jangan memberi akses baca ke `.env` backend.
+
+Proxy juga membuang `Cookie`, `X-Resource-Id`, `X-Mastra-Dev-Playground`, dan
+seluruh `X-Forwarded-*`/`X-Real-IP` dari klien, lalu membangun ulang header
+forwarding dari koneksi sebenarnya. Path dinormalisasi dan thread ID dibatasi
+ke karakter `[A-Za-z0-9_-]` (maksimal 128) agar allowlist tidak bisa dilewati
+lewat normalisasi path di sisi Mastra.
+
+Pengerasan lanjutan yang disarankan: tukar JWT user menjadi token internal
+berumur pendek dengan audience `mastra` dan claim minimal (`sub`, `role`),
+sehingga Mastra tidak perlu memegang `JWT_SECRET` dan token yang bocor tidak
+bisa dipakai ke REST API.
 
 Endpoint assistant juga terdokumentasi di Swagger (`/docs`) pada tag
 **Assistant**. Bila `MASTRA_URL` kosong, path `/api/v1/mastra/*` tidak terdaftar
